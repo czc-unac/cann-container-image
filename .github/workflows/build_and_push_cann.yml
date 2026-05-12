@@ -339,8 +339,8 @@ jobs:
             '.versions[] | select(.path == "cann/" + $cann_tag) | .tags[]' \
             cann_publish_version.json)
           registries=(
-            "docker.io/ascendai/cann"
-            "quay.io/ascend/cann"
+            "docker.io/canuunac/cann"
+            "quay.io/canuunac/cann"
           )
           first=true
           TAGS_JSON="["
@@ -364,10 +364,10 @@ jobs:
           readarray -t TAGS_ARRAY <<< "$(echo "$TAGS" | jq -r '.[]')"
 
           for TAG in "${TAGS_ARRAY[@]}"; do
-            if [[ "$TAG" == *"quay.io/ascend/cann"* ]]; then
+            if [[ "$TAG" == *"quay.io/canuunac/cann"* ]]; then
               docker buildx imagetools create -t "$TAG" \
                 $(printf 'quay.io/canuunac/cann@sha256:%s ' *)
-            elif [[ "$TAG" == *"docker.io/ascendai/cann"* ]]; then
+            elif [[ "$TAG" == *"docker.io/canuunac/cann"* ]]; then
               docker buildx imagetools create -t "$TAG" \
                 $(printf 'docker.io/canuunac/cann@sha256:%s ' *)
             else
@@ -482,8 +482,8 @@ jobs:
             '.versions[] | select(.path == "cann/" + $cann_tag) | .tags[]' \
             cann_publish_version.json)
           registries=(
-            "docker.io/ascendai/cann"
-            "quay.io/ascend/cann"
+            "docker.io/canuunac/cann"
+            "quay.io/canuunac/cann"
           )
           first=true
           TAGS_JSON="["
@@ -507,10 +507,10 @@ jobs:
           readarray -t TAGS_ARRAY <<< "$(echo "$TAGS" | jq -r '.[]')"
 
           for TAG in "${TAGS_ARRAY[@]}"; do
-            if [[ "$TAG" == *"quay.io/ascend/cann"* ]]; then
+            if [[ "$TAG" == *"quay.io/canuunac/cann"* ]]; then
               docker buildx imagetools create -t "$TAG"-devel \
                 $(printf 'quay.io/canuunac/cann@sha256:%s ' *)
-            elif [[ "$TAG" == *"docker.io/ascendai/cann"* ]]; then
+            elif [[ "$TAG" == *"docker.io/canuunac/cann"* ]]; then
               docker buildx imagetools create -t "$TAG"-devel \
                 $(printf 'docker.io/canuunac/cann@sha256:%s ' *)
             else
