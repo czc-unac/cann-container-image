@@ -242,7 +242,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: linux-x86_64
+            runner: ubuntu-latest
           - arch: aarch64
             runner: ubuntu-22.04-arm
     steps:
@@ -280,8 +280,8 @@ jobs:
         with: 
           platforms: ${{ matrix.arch }}
           tags: |
-            docker.io/ascendai/cann
-            quay.io/ascend/cann
+            docker.io/canuunac/cann
+            quay.io/canuunac/cann
           file: ${{ github.workspace }}/cann/${{ inputs.cann_tag }}/Dockerfile
           context: ${{ github.workspace }}/cann/${{ inputs.cann_tag }}
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
@@ -366,10 +366,10 @@ jobs:
           for TAG in "${TAGS_ARRAY[@]}"; do
             if [[ "$TAG" == *"quay.io/ascend/cann"* ]]; then
               docker buildx imagetools create -t "$TAG" \
-                $(printf 'quay.io/ascend/cann@sha256:%s ' *)
+                $(printf 'quay.io/canuunac/cann@sha256:%s ' *)
             elif [[ "$TAG" == *"docker.io/ascendai/cann"* ]]; then
               docker buildx imagetools create -t "$TAG" \
-                $(printf 'docker.io/ascendai/cann@sha256:%s ' *)
+                $(printf 'docker.io/canuunac/cann@sha256:%s ' *)
             else
               echo "Error: Unknown registry in TAG: $TAG"
               exit 1
@@ -422,8 +422,8 @@ jobs:
         with: 
           platforms: ${{ matrix.arch }}
           tags: |
-            docker.io/ascendai/cann
-            quay.io/ascend/cann
+            docker.io/canuunac/cann
+            quay.io/canuunac/cann
           file: ${{ github.workspace }}/cann/${{ inputs.cann_tag }}-devel/Dockerfile
           context: ${{ github.workspace }}/cann/${{ inputs.cann_tag }}-devel
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
@@ -508,56 +508,56 @@ jobs:
           for TAG in "${TAGS_ARRAY[@]}"; do
             if [[ "$TAG" == *"quay.io/ascend/cann"* ]]; then
               docker buildx imagetools create -t "$TAG"-devel \
-                $(printf 'quay.io/ascend/cann@sha256:%s ' *)
+                $(printf 'quay.io/canuunac/cann@sha256:%s ' *)
             elif [[ "$TAG" == *"docker.io/ascendai/cann"* ]]; then
               docker buildx imagetools create -t "$TAG"-devel \
-                $(printf 'docker.io/ascendai/cann@sha256:%s ' *)
+                $(printf 'docker.io/canuunac/cann@sha256:%s ' *)
             else
               echo "Error: Unknown registry in TAG: $TAG"
               exit 1
             fi
           done
 
-  sync-image:
-    runs-on: ubuntu-latest
-    needs: push-image
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # sync-image:
+  #   runs-on: ubuntu-latest
+  #   needs: push-image
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Install skopeo
-        run: |
-          sudo apt update
-          sudo apt install -y skopeo
+  #     - name: Install skopeo
+  #       run: |
+  #         sudo apt update
+  #         sudo apt install -y skopeo
 
-      - name: Login to Huawei Cloud SWR
-        run: |
-          echo "${{ secrets.HW_TOKEN }}" | skopeo login \
-            --username "${{ secrets.HW_USERNAME }}" \
-            --password-stdin \
-            swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci
+  #     - name: Login to Huawei Cloud SWR
+  #       run: |
+  #         echo "${{ secrets.HW_TOKEN }}" | skopeo login \
+  #           --username "${{ secrets.HW_USERNAME }}" \
+  #           --password-stdin \
+  #           swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci
 
-      - name: Login to AscendHub
-        run: |
-          echo "${{ secrets.ASCENDHUB_TOKEN }}" | skopeo login \
-            --username "${{ secrets.ASCENDHUB_USERNAME }}" \
-            --password-stdin \
-            swr.cn-east-3.myhuaweicloud.com/ascendhub-test
+  #     - name: Login to AscendHub
+  #       run: |
+  #         echo "${{ secrets.ASCENDHUB_TOKEN }}" | skopeo login \
+  #           --username "${{ secrets.ASCENDHUB_USERNAME }}" \
+  #           --password-stdin \
+  #           swr.cn-east-3.myhuaweicloud.com/ascendhub-test
 
-      - name: Sync image
-        run: |
-          skopeo copy --all \
-          docker://quay.io/ascend/cann:${{ inputs.cann_tag }} \
-          docker://swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:${{ inputs.cann_tag }}
+  #     - name: Sync image
+  #       run: |
+  #         skopeo copy --all \
+  #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }} \
+  #         docker://swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:${{ inputs.cann_tag }}
 
-          skopeo copy --all \
-          docker://quay.io/ascend/cann:${{ inputs.cann_tag }}-devel \
-          docker://swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:${{ inputs.cann_tag }}-devel
+  #         skopeo copy --all \
+  #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }}-devel \
+  #         docker://swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:${{ inputs.cann_tag }}-devel
 
-          skopeo copy --all \
-          docker://quay.io/ascend/cann:${{ inputs.cann_tag }} \
-          docker://swr.cn-east-3.myhuaweicloud.com/ascendhub-test/cann:${{ inputs.cann_tag }}
+  #         skopeo copy --all \
+  #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }} \
+  #         docker://swr.cn-east-3.myhuaweicloud.com/ascendhub-test/cann:${{ inputs.cann_tag }}
 
-          skopeo copy --all \
-          docker://quay.io/ascend/cann:${{ inputs.cann_tag }}-devel \
-          docker://swr.cn-east-3.myhuaweicloud.com/ascendhub-test/cann:${{ inputs.cann_tag }}-devel
+  #         skopeo copy --all \
+  #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }}-devel \
+  #         docker://swr.cn-east-3.myhuaweicloud.com/ascendhub-test/cann:${{ inputs.cann_tag }}-devel
