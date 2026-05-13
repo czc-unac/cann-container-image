@@ -192,6 +192,12 @@ on:
         type: boolean
         required: true
 
+      only_devel:
+        description: 'Only bulid and publish devel image'
+        default: false
+        type: boolean
+        required: true
+
 jobs:
   only-build:
     name: build ${{ inputs.cann_tag }} (${{ matrix.arch }})
@@ -236,7 +242,7 @@ jobs:
 
   build-push-digest:
     name: build ${{ inputs.cann_tag }} (${{ matrix.arch }})
-    if: ${{ inputs.publish }}
+    if: ${{ inputs.publish && (!inputs.only_devel) }}
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -303,6 +309,7 @@ jobs:
   
   push-image:
     runs-on: ubuntu-latest
+    if: ${{  !inputs.only_devel }}
     needs: build-push-digest
     steps:
       - name: Checkout
@@ -521,7 +528,7 @@ jobs:
 
   # sync-image:
   #   runs-on: ubuntu-latest
-  #   needs: push-image
+  #   needs: push-devel-image
   #   steps:
   #     - name: Checkout
   #       uses: actions/checkout@v4
@@ -546,18 +553,22 @@ jobs:
   #           swr.cn-east-3.myhuaweicloud.com/ascendhub-test
 
   #     - name: Sync image
+  #       if: ${{  !inputs.only_devel  }}
   #       run: |
   #         skopeo copy --all \
   #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }} \
   #         docker://swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:${{ inputs.cann_tag }}
 
   #         skopeo copy --all \
-  #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }}-devel \
-  #         docker://swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:${{ inputs.cann_tag }}-devel
-
-  #         skopeo copy --all \
   #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }} \
   #         docker://swr.cn-east-3.myhuaweicloud.com/ascendhub-test/cann:${{ inputs.cann_tag }}
+
+
+  #     - name: Sync devel image
+  #       run: |
+  #         skopeo copy --all \
+  #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }}-devel \
+  #         docker://swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:${{ inputs.cann_tag }}-devel
 
   #         skopeo copy --all \
   #         docker://quay.io/ascend/cann:${{ inputs.cann_tag }}-devel \
