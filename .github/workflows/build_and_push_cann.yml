@@ -384,8 +384,7 @@ jobs:
           done
 
   build-push-devel-digest:
-    if: ${{ inputs.publish && always() }}
-    needs: push-image
+    if: ${{ inputs.publish }}
     name: build ${{ inputs.cann_tag }} (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -396,6 +395,15 @@ jobs:
           - arch: aarch64
             runner: ubuntu-22.04-arm
     steps:
+      - name: Wait for base image if needed
+        if: ${{ !inputs.only_devel }}
+        uses: fountainhead/action-wait-for-check@v1.2.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: push-image
+          ref: ${{ github.ref }}
+          timeoutSeconds: 7200
+
       - name: Checkout
         uses: actions/checkout@v4
       
