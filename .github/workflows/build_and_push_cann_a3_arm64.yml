@@ -5,8 +5,8 @@ on:
 
 env:
   IMAGE: quay.io/canuunac/cann
-  TAG: 9.0.1-a3-ubuntu22.04-py3.12-arm64
-  DOCKERFILE: cann/9.0.1-a3-ubuntu22.04-py3.12/Dockerfile
+  TAG: 9.0.1-950-ubuntu22.04-py3.12-arm64
+  DOCKERFILE: cann/9.0.1-950-ubuntu22.04-py3.12/Dockerfile
 
 jobs:
   build-and-push:
