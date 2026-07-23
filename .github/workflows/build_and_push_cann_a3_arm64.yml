@@ -3,14 +3,9 @@ name: Build and Push CANN A3 Image (arm64)
 on:
   workflow_dispatch:
 
-env:
-  IMAGE: quay.io/canuunac/cann
-  TAG: 9.0.1-950-ubuntu22.04-py3.12-arm64
-  DOCKERFILE: cann/9.0.1-950-ubuntu22.04-py3.12/Dockerfile
-
 jobs:
   build-and-push:
-    name: Build and push ${{ env.IMAGE }}:${{ env.TAG }}
+    name: Build and push quay.io/canuunac/cann:9.0.1-950-ubuntu22.04-py3.12-arm64
     runs-on: ubuntu-22.04-arm
     steps:
       - name: Checkout
@@ -38,8 +33,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./${{ env.DOCKERFILE }}
+          file: ./cann/9.0.1-950-ubuntu22.04-py3.12/Dockerfile
           platforms: linux/arm64
           push: true
-          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          tags: quay.io/canuunac/cann:9.0.1-950-ubuntu22.04-py3.12-arm64
           provenance: false
