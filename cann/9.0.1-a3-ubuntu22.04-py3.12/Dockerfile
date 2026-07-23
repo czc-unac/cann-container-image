@@ -44,7 +44,7 @@ RUN curl -fsSL https://repo.huaweicloud.com/python/3.12.13/Python-3.12.13.tgz -o
 # Stage 2: Install CANN
 FROM python-installer AS cann-installer
 
-ARG TARGETPLATFORM
+ARG TARGETPLATFORM=linux/arm64
 
 RUN apt-get update && apt-get install --no-install-recommends -y \
         git \
@@ -167,6 +167,27 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /var/tmp/* \
     && rm -rf /tmp/*
+
+ARG UMDK_PKG=umdk-urma-26.06.0-B016.glibc217.aarch64.deb.tar.gz
+
+COPY ${UMDK_PKG} /tmp/
+
+RUN apt update && \
+    apt install -y libnl-3-dev libnl-genl-3-dev && \
+    if [ -n "${UMDK_PKG}" ] && [ -f "/tmp/${UMDK_PKG}" ]; then \
+        echo "installing umdk from /tmp/${UMDK_PKG}"; \
+        mkdir /tmp/umdk_pkgs; \
+        tar -mzxf "/tmp/${UMDK_PKG}" -C /tmp/umdk_pkgs ; \
+        dpkg -i /tmp/umdk_pkgs/*.deb; \
+    else \
+        echo "error: umdk package not provided"; \
+        exit 1; \
+   fi && \
+   apt-get clean && \
+   rm -rf /var/lib/apt/lists/* && \
+   rm -rf /tmp/* \
+   ldconfig
+
 
 COPY --from=cann-installer /usr/local/python3.12.13 /usr/local/python3.12.13
 COPY --from=cann-installer /usr/local/Ascend /usr/local/Ascend
