@@ -1,0 +1,23 @@
+{
+  "comment": [
+    "Version naming policy consumed by tools/gen_cann_release.py.",
+    "A new CANN version is auto-generatable only when its name matches one",
+    "of the kind patterns below (first match wins, in listed order).",
+    "Anything unmatched (e.g. historical 8.3.rc2-style names or future",
+    "schemes) aborts the generator so the release goes through the manual",
+    "release-cann-image skill instead. Extend this file, not the script,",
+    "when the community introduces a new naming style."
+  ],
+  "reject_substrings": ["alpha"],
+  "kinds": [
+    {"kind": "beta", "pattern": "^\\d+\\.\\d+\\.\\d+-beta\\.\\d+$"},
+    {"kind": "stable", "pattern": "^\\d+\\.\\d+\\.\\d+$"}
+  ],
+  "url_layout": {
+    "stable": "{base}/CANN/CANN%20{version}",
+    "beta": "{base}/CANN/CANN%20{link_id}"
+  },
+  "availability_probe_file": "Ascend-cann-toolkit_{version}_linux-aarch64.run",
+  "beta_requires_link_id": true,
+  "link_id_pattern": "^\\d+\\.\\d+\\.T\\d+$"
+}

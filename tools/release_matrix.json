@@ -1,0 +1,24 @@
+{
+  "comment": [
+    "Expected chip/OS/Python baseline used ONLY as a drift gate by",
+    "tools/gen_cann_release.py. The generated matrix itself is always",
+    "cloned from the previous release entries in build_cann_arg.json and",
+    "build_manylinux_arg.json (single source of truth); this file merely",
+    "detects when those entries drift away from what maintainers expect",
+    "(new chip series, new base image, accidental hotfix residue).",
+    "Update the sets here when the intended baseline changes; combos in a",
+    "new release outside these sets abort the run for human review.",
+    "Order is irrelevant; tags are cloned in the order found in the arg",
+    "files."
+  ],
+  "cann": {
+    "chips": ["310p", "910", "910b", "950", "A3"],
+    "os": ["ubuntu22.04", "openeuler24.03"],
+    "py_versions": ["3.10", "3.11", "3.12"]
+  },
+  "manylinux": {
+    "chips": ["310p", "910b", "950", "A3"],
+    "os": ["manylinux_2_34"],
+    "py_versions": ["3.10", "3.11", "3.12"]
+  }
+}
