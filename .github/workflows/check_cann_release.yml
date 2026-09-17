@@ -1,0 +1,104 @@
+name: check-cann-release
+
+on:
+  schedule:
+    - cron: '23 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cann-release-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Check for new CANN releases
+        id: check
+        run: |
+          python3 tools/check_cann_release.py --check > /tmp/report.json
+          cat /tmp/report.json
+      - name: Open or update one notification issue per version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          jq -r '.new_versions[] | [.version, (.publishTime // "unknown")] | @tsv' /tmp/report.json |
+          while IFS=$'\t' read -r version publish; do
+            # Version names come from an external bulletin API; never let a
+            # surprising token into an issue title or search string.
+            if ! [[ "$version" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
+              echo "skipping implausible version name: $version"
+              continue
+            fi
+            title="New CANN release detected: $version"
+            {
+              echo "## CANN \`$version\` is announced but not covered"
+              echo
+              echo "- Announced: $publish"
+              echo "- Source: [CANN bulletins page](https://www.hiascend.com/productbulletins?tab=CANN)"
+              echo
+              echo "To generate a draft release PR, comment on this issue:"
+              echo
+              if [[ "$version" == *-beta.* ]]; then
+                echo "- \`/release-cann $version <link-id>\` - \`<link-id>\` is the"
+                echo "  \`CANN x.y.Tn\` OBS directory from the bulletin download links,"
+                echo "  e.g. \`9.2.T3\`"
+              else
+                echo "- \`/release-cann $version\`"
+              fi
+              echo
+              echo "Last detected by run $RUN_URL."
+            } > /tmp/issue.md
+            # in:title phrase search is token-prefix based, so also require
+            # an exact title match before treating an issue as "already open".
+            number=$(gh issue list --state open --search "\"$title\" in:title" \
+                       --json number,title -q --arg t "$title" \
+                       '[.[] | select(.title == $t) | .number][0] // empty')
+            if [ -n "$number" ]; then
+              gh issue edit "$number" --body-file /tmp/issue.md
+            else
+              gh issue create --title "$title" --body-file /tmp/issue.md
+            fi
+          done
+      - name: Close notifications whose versions are covered
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          jq -r '.new_versions[].version' /tmp/report.json > /tmp/still-uncovered.txt
+          gh issue list --state open \
+            --search '"New CANN release detected" in:title' \
+            --json number,title -q '.[] | [.number, .title] | @tsv' |
+          while IFS=$'\t' read -r number title; do
+            version="${title#New CANN release detected: }"
+            if ! grep -Fxq "$version" /tmp/still-uncovered.txt; then
+              gh issue close "$number" --comment \
+                "CANN \`$version\` is now covered by the repository."
+            fi
+          done
+      - name: Open failure issue
+        if: failure()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="CANN release monitor failed"
+          if [ -n "$(gh issue list --state open --search "$title in:title" --json number -q '.[].number')" ]; then
+            echo "failure issue already open"
+          else
+            gh issue create --title "$title" \
+              --body "The daily bulletin check crashed. Logs: ${RUN_URL}"
+          fi
