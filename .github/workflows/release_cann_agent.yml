@@ -1,0 +1,200 @@
+name: release-cann-agent
+
+# Half-automation companion of check_cann_release.yml: the daily bulletin
+# monitor opens one "New CANN release detected: <version>" issue per
+# uncovered version; a maintainer replies on that issue with
+#   /release-cann <version>              (stable)
+#   /release-cann <version> <x.y.Tn>     (beta, OBS link-id)
+# and this workflow runs tools/gen_cann_release.py, gates the result and
+# pushes a branch plus a draft PR. Nothing is ever published; building and
+# pushing images stay manual workflow_dispatch exactly as before.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'CANN version, e.g. 9.3.0-beta.1'
+        required: true
+      link_id:
+        description: 'OBS CANN x.y.Tn directory (beta only)'
+        required: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release-cann-agent
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: 1
+
+jobs:
+  generate-release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request == null &&
+       github.event.comment.author_association == 'OWNER' &&
+       github.event.comment.user.login == github.repository_owner &&
+       startsWith(github.event.issue.title,
+                  'New CANN release detected: ') &&
+       startsWith(github.event.comment.body, '/release-cann '))
+    runs-on: ubuntu-latest
+    env:
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      DISPATCH_VERSION: ${{ github.event.inputs.version }}
+      DISPATCH_LINK_ID: ${{ github.event.inputs.link_id }}
+      PR_TARGET_REPO: ${{ vars.RELEASE_PR_TARGET_REPO }}
+      PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+      RELEASE_GIT_NAME: ${{ vars.RELEASE_GIT_NAME }}
+      RELEASE_GIT_EMAIL: ${{ vars.RELEASE_GIT_EMAIL }}
+    steps:
+      - name: Parse /release-cann trigger
+        id: args
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="$DISPATCH_VERSION"
+            link_id="$DISPATCH_LINK_ID"
+          else
+            words=( $COMMENT_BODY )
+            [ "${words[0]:-}" = "/release-cann" ] || exit 1
+            version="${words[1]:-}"
+            link_id="${words[2]:-}"
+            # A trigger comment must target the version its issue tracks.
+            title_version="${ISSUE_TITLE#New CANN release detected: }"
+            if [ "$version" != "$title_version" ]; then
+              echo "comment targets '$version' but this issue tracks" \
+                   "'$title_version'; post the command on the right issue" >&2
+              exit 1
+            fi
+          fi
+          # Only validated tokens ever reach git/gh/python argument lists.
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+            echo "REJECT_VERSION" >&2
+            echo "invalid version '$version' for auto-release; irregular names" \
+                 "are handled with the release-cann-image skill manually" >&2
+            exit 1
+          fi
+          if [[ "$version" == *-beta.* && ! "$link_id" =~ ^[0-9]+\.[0-9]+\.T[0-9]+$ ]]; then
+            echo "beta releases need the OBS directory as second argument:" >&2
+            echo "  /release-cann $version x.y.Tn" >&2
+            exit 1
+          fi
+          if [[ "$version" != *-beta.* && -n "$link_id" ]]; then
+            echo "stable releases must not carry a link-id" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "link_id=$link_id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate the release change-set
+        env:
+          VERSION: ${{ steps.args.outputs.version }}
+          LINK_ID: ${{ steps.args.outputs.link_id }}
+        run: |
+          set -euo pipefail
+          gen_args=("$VERSION")
+          [ -n "$LINK_ID" ] && gen_args+=(--link-id "$LINK_ID")
+          python3 tools/gen_cann_release.py "${gen_args[@]}" | tee /tmp/gen.log
+
+      - name: Gate - only release-owned paths may change
+        run: |
+          set -euo pipefail
+          git ls-files --others --exclude-standard > /tmp/untracked
+          { git diff --name-only; cat /tmp/untracked; } | sort -u > /tmp/touched
+          grep -v -E '^(tools/template\.py|build_(cann|manylinux)_arg\.json|cann_publish_version\.json|manylinux_publish_version\.json|OVERVIEW\.(md|zh\.md)|supported_tags\.md|\.github/workflows/(batch_)?build_and_push_(cann|manylinux)\.yml|cann/|manylinux/)' \
+            /tmp/touched > /tmp/foreign || true
+          if [ -s /tmp/foreign ]; then
+            echo "generator touched unexpected paths:" >&2
+            cat /tmp/foreign >&2
+            exit 1
+          fi
+          git diff --check
+          echo "gate passed: $(wc -l < /tmp/touched) files, all release-owned"
+
+      - name: Gate - repository now covers the version
+        env:
+          VERSION: ${{ steps.args.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$VERSION" <<'PY'
+          import sys
+          sys.path.insert(0, "tools")
+          from check_cann_release import is_known, known_tokens
+          version = sys.argv[1]
+          if not is_known(version, known_tokens()):
+              sys.exit(f"{version} still not covered after generation")
+          print(f"coverage gate passed for {version}")
+          PY
+
+      - name: Commit, push branch and open draft PR
+        id: pr
+        env:
+          VERSION: ${{ steps.args.outputs.version }}
+          LINK_ID: ${{ steps.args.outputs.link_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="release-cann-$VERSION"
+          git config user.name "${RELEASE_GIT_NAME:-$GITHUB_ACTOR}"
+          git config user.email "${RELEASE_GIT_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}"
+          git checkout -B "$branch"
+          git add -A
+          git commit -s -m "Add CANN $VERSION images" -m \
+          "Generated by tools/gen_cann_release.py${LINK_ID:+ with OBS link-id $LINK_ID}
+          from the /release-cann trigger in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+          git push -f origin "$branch"
+
+          target="${PR_TARGET_REPO:-$GITHUB_REPOSITORY}"
+          pr_body="Auto-generated from the CANN release monitor.
+
+          - Version: \`$VERSION\`${LINK_ID:+ / OBS directory: \`$LINK_ID\`}
+          - Generator: \`tools/gen_cann_release.py\` (golden-replay verified)
+          - Build/publish stay manual: run the batch workflow_dispatch after merge."
+          if [ -n "$PR_TOKEN" ]; then
+            GH_TOKEN="$PR_TOKEN"
+          fi
+          if pr_url=$(gh pr create --repo "$target" --base main \
+              --head "$GITHUB_REPOSITORY_OWNER:$branch" --draft \
+              --title "Add CANN $VERSION images" --body "$pr_body" 2>/tmp/pr.err); then
+            echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+            echo "opened $pr_url"
+          else
+            echo "branch pushed; PR creation failed:" >&2
+            cat /tmp/pr.err >&2
+            echo "pr_url=https://github.com/$target/compare/main...$GITHUB_REPOSITORY_OWNER:$branch?expand=1&draft=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report back to the notification issue
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.args.outputs.version }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${{ job.status }}" = "success" ]; then
+            body="Draft PR generated for \`$VERSION\`: $PR_URL (run: $RUN_URL).
+          Review, then mark ready and merge; build/publish remain manual."
+          else
+            body="Could not auto-generate the release PR for \`$VERSION\` this run ($RUN_URL).
+          See the job log; irregular version naming or OBS gaps need the manual skill flow."
+          fi
+          gh issue comment "${{ github.event.issue.number }}" --body "$body"
