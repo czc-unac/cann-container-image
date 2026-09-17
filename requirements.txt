@@ -1,1 +1,2 @@
 jinja2
+requests  # tools/check_cann_release.py
