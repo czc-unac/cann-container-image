@@ -35,7 +35,7 @@ jobs:
         run: |
           python3 tools/check_cann_release.py --check > /tmp/report.json
           cat /tmp/report.json
-      - name: Open or update one notification issue per version
+      - name: Open one notification issue per version
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -72,7 +72,7 @@ jobs:
                 echo "- \`/release-cann $version\`"
               fi
               echo
-              echo "Last detected by run $RUN_URL."
+              echo "Detected by run $RUN_URL."
             } > /tmp/issue.md
             # in:title phrase search is token-prefix based, so also require
             # an exact title match before treating an issue as "already open".
@@ -80,7 +80,10 @@ jobs:
                        --json number,title -q --arg t "$title" \
                        '[.[] | select(.title == $t) | .number][0] // empty')
             if [ -n "$number" ]; then
-              gh issue edit "$number" --body-file /tmp/issue.md
+              # The body is static per version (version, publish time, usage
+              # hint, OBS directory all exist at creation); re-editing it on
+              # every run would only churn the run URL, so leave it alone.
+              echo "issue #$number already tracks $version; leaving it untouched"
             else
               gh issue create --title "$title" --body-file /tmp/issue.md
             fi
