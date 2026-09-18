@@ -16,6 +16,13 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # Crash notifications are emailed instead of opening issues. Set the
+      # repository variable MAIL_NOTIFY_TO (recipient) - and optionally
+      # MAIL_NOTIFY_FROM - plus the MAIL_SERVER / MAIL_PORT / MAIL_USERNAME /
+      # MAIL_PASSWORD secrets to enable them; unset means the step is skipped.
+      MAIL_NOTIFY_TO: ${{ vars.MAIL_NOTIFY_TO }}
+      MAIL_NOTIFY_FROM: ${{ vars.MAIL_NOTIFY_FROM }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -114,17 +121,19 @@ jobs:
                         then "; missing e.g. " + (.missing | join(", "))
                         else "" end)' /tmp/report.json
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Open failure issue
-        if: failure()
+      - name: Email the maintainer on failure
+        if: failure() && env.MAIL_NOTIFY_TO != ''
         continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          title="CANN release monitor failed"
-          if [ -n "$(gh issue list --state open --search "$title in:title" --json number -q '.[].number')" ]; then
-            echo "failure issue already open"
-          else
-            gh issue create --title "$title" \
-              --body "The daily bulletin check crashed. Logs: ${RUN_URL}"
-          fi
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[${{ github.repository }}] CANN release monitor failed"
+          to: ${{ env.MAIL_NOTIFY_TO }}
+          from: ${{ env.MAIL_NOTIFY_FROM != '' && env.MAIL_NOTIFY_FROM || secrets.MAIL_USERNAME }}
+          body: |
+            The daily CANN bulletin check crashed (workflow: check-cann-release).
+
+            Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
