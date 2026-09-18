@@ -17,7 +17,25 @@
     "stable": "{base}/CANN/CANN%20{version}",
     "beta": "{base}/CANN/CANN%20{link_id}"
   },
-  "availability_probe_file": "Ascend-cann-toolkit_{version}_linux-aarch64.run",
+  "availability": {
+    "comment": [
+      "A version is buildable only when EVERY file below exists on OBS",
+      "for every chip of the current matrix and both arches. File names",
+      "must match the generated Dockerfiles exactly (tools/template.py",
+      "uses the raw cann_chip, so A3 stays uppercase).",
+      "missing_statuses are the anonymous-HEAD answers OBS gives for keys",
+      "that do not exist; any other non-200 answer counts as UNKNOWN and",
+      "aborts instead of silently suppressing a release."
+    ],
+    "arches": ["aarch64", "x86_64"],
+    "file_templates": [
+      "Ascend-cann-toolkit_{version}_linux-{arch}.run",
+      "Ascend-cann-nnal_{version}_linux-{arch}.run",
+      "Ascend-cann-{chip}-ops_{version}_linux-{arch}.run"
+    ],
+    "beta_scan_max": 600,
+    "missing_statuses": [403, 404]
+  },
   "beta_requires_link_id": true,
   "link_id_pattern": "^\\d+\\.\\d+\\.T\\d+$"
 }
