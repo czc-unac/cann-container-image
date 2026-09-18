@@ -10,19 +10,27 @@ announced on https://www.hiascend.com/productbulletins?tab=CANN that the
 repository does not cover yet. Alpha versions are ignored entirely: they
 are never built into images here.
 
-Two guards keep the report quiet until a version is genuinely actionable:
+Three guards keep the report quiet until a version is genuinely actionable:
 
 * a version counts as covered once any known tag, publish path, workflow
   option or supported_tags.md heading carries it;
-* a version is only reported if its bulletin was published later than the
+* a version is only considered if its bulletin was published later than the
   newest publish time among versions the repository already covers, so
-  historical versions maintainers deliberately skipped (e.g. 9.1.0-beta.2)
-  do not resurface every day.
+  historical versions maintainers deliberately skipped do not resurface
+  every day;
+* the full package set (toolkit, nnal, per-chip ops for every current chip
+  and both arches, probed over HTTP by tools/cann_availability.py) must
+  exist on OBS. Announced-but-incomplete releases (e.g. 9.1.0-beta.2, whose
+  ops archives for 910b/310p/A3/910 were never uploaded - only 950 was
+  covered) land in ``announced_not_buildable`` in the JSON report and open
+  no issue; that is a condition-of-CANN-not-satisfied state, not a
+  maintainer decision to skip a release.
 
 The report is consumed by .github/workflows/check_cann_release.yml, which
-opens a notification issue; release files are generated from that issue by
-commenting "/release-cann <version> [link-id]", which triggers
-tools/gen_cann_release.py via .github/workflows/release_cann_agent.yml.
+opens one notification issue per buildable version; release files are
+generated from that issue by commenting "/release-cann <version> [link-id]",
+which triggers tools/gen_cann_release.py via
+.github/workflows/release_cann_agent.yml.
 
 Adapted from Ascend/cann-container-image pull request #131 by wjunLu.
 """
@@ -30,12 +38,20 @@ import argparse
 import json
 import os
 import re
+import sys
 
 import requests
+
+from cann_availability import (AvailabilityUnknown, cann_url_prefix,
+                               check_files, current_chips,
+                               load_availability_policy, obs_base_url,
+                               required_files, scan_beta, version_sort_key)
 
 BULLETIN_LIST_URL = ("https://www.hiascend.com/ascendgateway/ascendservice/"
                      "bulletins/front/list")
 BULLETIN_REFERER = "https://www.hiascend.com/productbulletins?tab=CANN"
+PROFILES_JSON = os.path.join("tools", "release_profiles.json")
+TEMPLATE_PY = os.path.join("tools", "template.py")
 ARG_CANN_JSON = "build_cann_arg.json"
 ARG_MANYLINUX_JSON = "build_manylinux_arg.json"
 PUBLISH_CANN_JSON = "cann_publish_version.json"
@@ -60,17 +76,6 @@ def classify_version(version):
     if "beta" in version:
         return "beta"
     return "stable"
-
-
-def version_sort_key(version):
-    """Sort key so 9.1.0 < 9.1.0-beta.1 < 9.1.1 < 9.2.0-beta.1."""
-    parts = []
-    for token in re.split(r"[.\-]", version):
-        if token.isdigit():
-            parts.append((0, int(token), ""))
-        else:
-            parts.append((1, 0, token))
-    return parts
 
 
 def make_session():
@@ -149,6 +154,40 @@ def publish_floor(bulletins, tokens):
     return max(times) if times else None
 
 
+def buildability(version, kind, policy, base_url, chips):
+    """Decide whether this version's full package set exists on OBS.
+
+    Returns (buildable, oss_dir, reason, missing_sample). Raises
+    AvailabilityUnknown when a probe could not be decided, so a flaky
+    gateway never silently downgrades a real release to "not buildable".
+    """
+    files = required_files(policy, version, chips)
+    missing_statuses = policy["missing_statuses"]
+    if kind == "beta":
+        buildable_dir, found, incomplete = scan_beta(
+            base_url, version, files, policy, missing_statuses)
+        if buildable_dir:
+            return True, buildable_dir, "", []
+        if incomplete:
+            directory = sorted(incomplete)[0]
+            sample = incomplete[directory]
+            return (False, "",
+                    f"package set incomplete under {directory} "
+                    f"({len(sample)}/{len(files)} files missing)", sample[:4])
+        return False, "", "no OBS directory found for this beta", []
+
+    prefix = cann_url_prefix(base_url, version, kind)
+    missing, unknown = check_files(prefix, files, missing_statuses)
+    if unknown:
+        raise AvailabilityUnknown(
+            f"probing {prefix} answered unclearly: {unknown[:3]}")
+    if missing:
+        return (False, "",
+                f"package set incomplete ({len(missing)}/{len(files)} files "
+                "missing)", missing[:4])
+    return True, version, "", []
+
+
 def cmd_check(session):
     bulletins = fetch_bulletin_versions(session)
     if not bulletins:
@@ -157,18 +196,38 @@ def cmd_check(session):
         raise BulletinAPIError("bulletin list came back empty")
     tokens = known_tokens()
     floor = publish_floor(bulletins, tokens)
-    new_versions = sorted(
+    candidates = sorted(
         (v for v in bulletins
          if classify_version(v) in ("stable", "beta")
          and not is_known(v, tokens)
          and (floor is None or (bulletins[v].get("publishTime") or "") > floor)),
         key=version_sort_key)
-    report = {
-        "new_versions": [
-            {"version": v, "publishTime": bulletins[v].get("publishTime") or ""}
-            for v in new_versions],
-    }
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    policy = load_availability_policy(PROFILES_JSON)
+    base_url = obs_base_url(TEMPLATE_PY)
+    chips = current_chips(ARG_CANN_JSON, ARG_MANYLINUX_JSON)
+    print(f"[check_cann_release] probing packages for {len(candidates)} "
+          f"candidate(s); matrix chips: {chips}", file=sys.stderr)
+
+    new_versions, not_buildable = [], []
+    for version in candidates:
+        kind = classify_version(version)
+        publish_time = bulletins[version].get("publishTime") or ""
+        buildable, oss_dir, reason, missing = buildability(
+            version, kind, policy, base_url, chips)
+        if buildable:
+            new_versions.append({"version": version,
+                                 "publishTime": publish_time,
+                                 "oss_dir": oss_dir if kind == "beta" else ""})
+        else:
+            not_buildable.append({"version": version,
+                                  "publishTime": publish_time,
+                                  "reason": reason, "missing": missing})
+            print(f"[check_cann_release] announced but not buildable: "
+                  f"{version} - {reason}", file=sys.stderr)
+
+    print(json.dumps({"new_versions": new_versions,
+                      "announced_not_buildable": not_buildable},
+                     indent=2, ensure_ascii=False))
 
 
 def main():
