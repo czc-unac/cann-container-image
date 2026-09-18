@@ -46,7 +46,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from check_cann_release import is_known, known_tokens, version_sort_key
+from cann_availability import (cann_url_prefix, check_files, obs_base_url,
+                               required_files, version_sort_key)
+from check_cann_release import is_known, known_tokens
 
 PROFILES_JSON = os.path.join("tools", "release_profiles.json")
 MATRIX_JSON = os.path.join("tools", "release_matrix.json")
@@ -135,29 +137,32 @@ def classify_version(version, policy):
                        "release-cann-image skill manually")
 
 
-def obs_base_url():
-    match = re.search(r'^BASE_URL = "([^"]+)"', read_text(TEMPLATE_PY), re.M)
-    if not match:
-        abort(EXIT_DRIFT, f"could not parse BASE_URL from {TEMPLATE_PY}")
-    return match.group(1)
+def probe_packages(version, kind, link_id, policy, chips):
+    """Every archive a complete build needs must exist on OBS; else exit 3.
 
-
-def probe_packages(version, kind, link_id, policy):
-    """HEAD the availability probe file; abort (exit 3) unless HTTP 200."""
-    layout = policy["url_layout"][kind]
-    url = layout.format(base=obs_base_url(), version=version,
-                        link_id=link_id or "")
-    url += "/" + policy["availability_probe_file"].format(version=version)
-    try:
-        resp = requests.head(url, timeout=30, allow_redirects=True)
-    except requests.RequestException as exc:
-        abort(EXIT_UNAVAILABLE, f"probe failed for {url}: {exc}")
-    if resp.status_code != 200:
+    Probing toolkit only would wave through releases like 9.1.0-beta.2
+    (announced, toolkit/nnal uploaded, ops archives for 910b/310p/A3/910
+    never published), whose Dockerfiles would then fail mid-build.
+    """
+    base_url = obs_base_url(TEMPLATE_PY)
+    availability = policy["availability"]
+    files = required_files(availability, version, chips)
+    prefix = cann_url_prefix(base_url, version, kind, link_id)
+    missing, unknown = check_files(prefix, files,
+                                   availability["missing_statuses"])
+    if unknown:
+        abort(EXIT_UNAVAILABLE, f"OBS probe inconclusive for {prefix}: "
+                                f"{unknown[:3]}; retry later")
+    if missing:
         abort(EXIT_UNAVAILABLE,
-              f"CANN {version} packages not downloadable yet (HTTP "
-              f"{resp.status_code} for {url}); the bulletin may precede "
-              "the actual package upload - retry later")
-    print(f"[gen_cann_release] OBS availability confirmed: {url}")
+              f"CANN {version} is announced but its package set is incomplete "
+              f"({len(missing)}/{len(files)} files missing under {prefix}), "
+              f"e.g. {missing[:4]}. The bulletin may still be uploading, or "
+              "the release intentionally covers only part of the platform "
+              "matrix (e.g. 950 only) - in that case build it with the "
+              "release-cann-image skill manually")
+    print(f"[gen_cann_release] OBS availability confirmed "
+          f"({len(files)} files): {prefix}")
 
 
 def load_json_lossless(path):
@@ -525,7 +530,8 @@ def main():
                               f"docs before generating {args.version}")
 
     if not args.skip_probe:
-        probe_packages(args.version, kind, link_id, policy)
+        chips = sorted({e["cann_chip"] for e in new_cann + new_manylinux})
+        probe_packages(args.version, kind, link_id, policy, chips)
 
     if kind == "beta":
         patch_alpha_dict(args.version, link_id)
