@@ -14,10 +14,13 @@ Three guards keep the report quiet until a version is genuinely actionable:
 
 * a version counts as covered once any known tag, publish path, workflow
   option or supported_tags.md heading carries it;
-* a version is only considered if its bulletin was published later than the
-  newest publish time among versions the repository already covers, so
-  historical versions maintainers deliberately skipped do not resurface
-  every day;
+* historical, deliberately skipped versions stay quiet through two OR-ed
+  guards (see candidate_versions): the version must sort above the newest
+  covered version, or its bulletin must be published after the newest
+  publish time among covered versions. The version-order guard is what
+  catches betas announced ahead of the stable they precede (9.2.0-beta.1
+  announced 2026/08/11 while 9.1.1, bulletin 2026/09/01, was the newest
+  covered release), which a pure publish-time floor would have missed;
 * the full package set (toolkit, nnal, per-chip ops for every current chip
   and both arches, probed over HTTP by tools/cann_availability.py) must
   exist on OBS. Announced-but-incomplete releases (e.g. 9.1.0-beta.2, whose
@@ -154,6 +157,47 @@ def publish_floor(bulletins, tokens):
     return max(times) if times else None
 
 
+def newest_covered(bulletins, tokens):
+    """Highest covered bulletin version by version order (not by date)."""
+    covered = [v for v in bulletins if is_known(v, tokens)]
+    return max(covered, key=version_sort_key) if covered else None
+
+
+def candidate_versions(bulletins, tokens):
+    """Uncovered stable/beta versions that are genuinely new to this repo.
+
+    Two complementary guards, OR-ed, so intentionally skipped history stays
+    quiet without hiding betas announced ahead of (or on the same day as) a
+    stable release:
+
+    * the version sorts above the newest covered version - this is what
+      catches 9.2.0-beta.1 (bulletin 2026/08/11) while 9.1.1 (bulletin
+      2026/09/01) is the newest covered release, and 9.2.0-beta.2 tie-ing
+      the floor date; and
+    * the bulletin was published strictly after the newest publish time
+      among covered versions - this catches a lower-numbered release that
+      was published later than a higher-numbered covered one.
+
+    Deliberately skipped versions stay suppressed by both guards: 9.1.0-beta.2
+    sorts below 9.1.1 and was published before it.
+    """
+    floor = publish_floor(bulletins, tokens)
+    newest = newest_covered(bulletins, tokens)
+    candidates = []
+    for version in bulletins:
+        if classify_version(version) not in ("stable", "beta"):
+            continue
+        if is_known(version, tokens):
+            continue
+        above_newest = (newest is None or
+                        version_sort_key(version) > version_sort_key(newest))
+        published_after_floor = (floor is not None and
+                                 (bulletins[version].get("publishTime") or "") > floor)
+        if above_newest or published_after_floor:
+            candidates.append(version)
+    return sorted(candidates, key=version_sort_key)
+
+
 def buildability(version, kind, policy, base_url, chips):
     """Decide whether this version's full package set exists on OBS.
 
@@ -195,13 +239,7 @@ def cmd_check(session):
         # "nothing new" on that would wrongly close open notifications.
         raise BulletinAPIError("bulletin list came back empty")
     tokens = known_tokens()
-    floor = publish_floor(bulletins, tokens)
-    candidates = sorted(
-        (v for v in bulletins
-         if classify_version(v) in ("stable", "beta")
-         and not is_known(v, tokens)
-         and (floor is None or (bulletins[v].get("publishTime") or "") > floor)),
-        key=version_sort_key)
+    candidates = candidate_versions(bulletins, tokens)
     policy = load_availability_policy(PROFILES_JSON)
     base_url = obs_base_url(TEMPLATE_PY)
     chips = current_chips(ARG_CANN_JSON, ARG_MANYLINUX_JSON)
