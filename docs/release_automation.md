@@ -35,7 +35,7 @@ existing `workflow_dispatch` release flow is untouched.
   | check-cann-release.yml (daily)    |                          |
   |   tools/check_cann_release.py ----+--> tools/cann_availability.py
   |   - covered?  (known_tokens)      |                          |
-  |   - newer than publish floor?     |                          |
+  |   - fresh vs newest/floor guard   |                          |
   |   - full package set present? ----+--------------------------+
   +-----------------------------------+
         | new_versions            | announced_not_buildable
@@ -227,8 +227,16 @@ spelling, so `A3` stays uppercase in the file name.
 ```
 bulletins ──► candidates ──► buildability ──► new_versions (actionable)
              (coverage +      (cann_          └ announced_not_buildable
-              floor)           availability)     (log/summary only)
+              freshness)       availability)     (log/summary only)
 ```
+
+Freshness is decided by two OR-ed guards so intentionally skipped history
+stays quiet without hiding betas announced ahead of the stable they precede:
+the version sorts above the newest covered version, or its bulletin is newer
+than the publish floor. The publish floor alone would have missed both
+`9.2.0-beta.1` (2026/08/11) and `9.2.0-beta.2` (2026/09/01, tied with the
+`9.1.1` floor), which is exactly what the trial on a pre-#130 repository state
+demonstrated.
 
 ### Function reference
 
@@ -240,9 +248,11 @@ bulletins ──► candidates ──► buildability ──► new_versions (ac
 | `_read_text` / `_load_json` | tolerate files that do not exist yet (empty string / `{}`) |
 | `known_tokens` | everything the repo already covers: all tags in both arg files, publish entry paths (`cann/<tag>` → `<tag>`), `- <tag>` option lines in the four build/push ymls, `### CANN <v>` headings in `supported_tags.md` |
 | `is_known` | covered if a token equals the version or starts with `<version>-` |
-| `publish_floor` | newest `publishTime` among covered bulletin versions; suppresses deliberately skipped historical releases (e.g. `9.1.0-beta.2` even if its packages existed) |
+| `publish_floor` | newest `publishTime` among covered bulletin versions; one of the two freshness guards |
+| `newest_covered` | highest covered bulletin version ordered by version (not by date); the other freshness guard |
+| `candidate_versions` | OR-ed guards: report when the version sorts above the newest covered version **or** its bulletin beats the publish floor; returns the sorted candidate list |
 | `buildability` | stable → probe `CANN%20<version>` directly; beta → `scan_beta`; returns `(buildable, oss_dir, reason, missing_sample)`; propagates `AvailabilityUnknown` |
-| `cmd_check` | orchestrates: fetch → empty check → tokens → floor → candidates (sorted) → per-candidate buildability → JSON report; logs probe progress and not-buildable reasons to stderr |
+| `cmd_check` | orchestrates: fetch → empty check → tokens → `candidate_versions` → per-candidate buildability → JSON report; logs probe progress and not-buildable reasons to stderr |
 
 ### Report schema (stdout, consumed by the workflow)
 
