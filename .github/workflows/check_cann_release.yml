@@ -76,8 +76,11 @@ jobs:
             } > /tmp/issue.md
             # in:title phrase search is token-prefix based, so also require
             # an exact title match before treating an issue as "already open".
+            # gh's --jq only takes an expression (no jq CLI flags such as
+            # --arg), so the matching runs through the runner's real jq.
             number=$(gh issue list --state open --search "\"$title\" in:title" \
-                       --json number,title -q --arg t "$title" \
+                       --json number,title |
+                     jq -r --arg t "$title" \
                        '[.[] | select(.title == $t) | .number][0] // empty')
             if [ -n "$number" ]; then
               # The body is static per version (version, publish time, usage
@@ -96,7 +99,8 @@ jobs:
           jq -r '.new_versions[].version' /tmp/report.json > /tmp/still-uncovered.txt
           gh issue list --state open \
             --search '"New CANN release detected" in:title' \
-            --json number,title -q '.[] | [.number, .title] | @tsv' |
+            --json number,title |
+          jq -r '.[] | [.number, .title] | @tsv' |
           while IFS=$'\t' read -r number title; do
             version="${title#New CANN release detected: }"
             if ! grep -Fxq "$version" /tmp/still-uncovered.txt; then
