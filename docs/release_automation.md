@@ -466,11 +466,12 @@ an arch list is a config change, never a code change.
 | `issues: write` | notification issues | monitor workflow |
 | `contents: write`, `pull-requests: write` | branch + draft PR | agent workflow, runs in this repository |
 | `vars.RELEASE_GIT_NAME` / `RELEASE_GIT_EMAIL` | commit identity | must be the CLA-signed email, otherwise `ascend-cla/no` blocks the PR |
+| `secrets.RELEASE_PUSH_TOKEN` | pushing the generated branch | **required**: fine-grained PAT scoped to this repository with **Contents: Read and write** and **Workflows: Read and write**. Every release change-set updates the four build/push workflow ymls (their `workflow_dispatch` version lists), and the built-in `GITHUB_TOKEN` can never create or update files under `.github/workflows/`, so a plain-token push is rejected by GitHub. `actions/checkout` uses this token when present; the push step fails early with the exact scopes to grant when it is missing and the change-set touches workflows |
 | `vars.RELEASE_PR_TARGET_REPO` | where the draft PR is opened | falls back to this repository; cross-repo needs the token below |
 | `secrets.RELEASE_PR_TOKEN` | cross-repo PR creation | fine-grained PAT with `pull requests: write`; without it the run degrades to "branch pushed + compare link" |
 | `vars.MAIL_NOTIFY_TO`, `secrets.MAIL_SERVER/PORT/USERNAME/PASSWORD` | crash email | if unset the step is skipped; `continue-on-error` keeps mail failures from masking the real one |
 
-Two things reviewers should weigh explicitly:
+Three things reviewers should weigh explicitly:
 
 1. **Merging enables a daily cron in this repository** that may open issues.
    Issue creation here is currently restricted, so this is a policy decision,
@@ -479,13 +480,20 @@ Two things reviewers should weigh explicitly:
 2. **One new third-party action**, `dawidd6/action-send-mail@v3`, only for
    failure email and only when configured. Happy to pin it to a commit SHA, or
    to drop the email path entirely.
+3. **The push token is privileged.** It exists only because the four build/push
+   workflows must gain the new version in their `workflow_dispatch` lists, and
+   GitHub never lets the built-in `GITHUB_TOKEN` update workflow files. An
+   alternative that removes the PAT entirely is to turn `cann_version` into a
+   free-text input (or read the version list from a data file); that is a UX
+   change to maintainer-facing workflows, so it is left as a discussion point
+   rather than assumed here.
 
 ## Rollout
 
 1. Merge into this repository (or a fork) — the comment trigger and cron only
    activate from the default branch.
-2. Set the variables/secrets above; `RELEASE_PR_TARGET_REPO` can stay unset for
-   a same-repo rehearsal.
+2. Set the variables/secrets above, `RELEASE_PUSH_TOKEN` included
+   (`RELEASE_PR_TARGET_REPO` can stay unset for a same-repo rehearsal).
 3. Try it with `workflow_dispatch` on `release_cann_agent.yml`
    (`version` + optional `link_id`).
 4. Build/publish afterwards is the existing manual `workflow_dispatch`

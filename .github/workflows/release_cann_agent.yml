@@ -95,6 +95,14 @@ jobs:
           echo "link_id=$link_id" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
+        with:
+          # Every release change-set updates the four build/push workflow
+          # ymls (their workflow_dispatch version lists), and GitHub refuses
+          # to let the built-in GITHUB_TOKEN create or update workflow
+          # files. RELEASE_PUSH_TOKEN is a fine-grained PAT scoped to this
+          # repository with Contents and Workflows read+write; the push
+          # step below preflights that combination.
+          token: ${{ secrets.RELEASE_PUSH_TOKEN || github.token }}
 
       - uses: actions/setup-python@v5
         with:
@@ -148,10 +156,23 @@ jobs:
         env:
           VERSION: ${{ steps.args.outputs.version }}
           LINK_ID: ${{ steps.args.outputs.link_id }}
+          PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           branch="release-cann-$VERSION"
+
+          # GitHub blocks the built-in GITHUB_TOKEN from creating or
+          # updating files under .github/workflows/, and the release
+          # change-set always touches them, so fail with the exact fix
+          # instead of surfacing the remote rejection later.
+          if git status --porcelain | grep -q '\.github/workflows/'; then
+            if [ -z "$PUSH_TOKEN" ]; then
+              echo "::error::the change-set updates .github/workflows/* but no RELEASE_PUSH_TOKEN secret is configured; GitHub never allows the built-in GITHUB_TOKEN to touch workflow files. Add a fine-grained PAT scoped to this repository with Contents: Read and write and Workflows: Read and write."
+              exit 1
+            fi
+          fi
+
           git config user.name "${RELEASE_GIT_NAME:-$GITHUB_ACTOR}"
           git config user.email "${RELEASE_GIT_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}"
           git checkout -B "$branch"
