@@ -48,7 +48,8 @@ import requests
 from cann_availability import (AvailabilityUnknown, cann_url_prefix,
                                check_files, current_chips,
                                load_availability_policy, obs_base_url,
-                               required_files, scan_beta, version_sort_key)
+                               probe_settings, required_files, scan_beta,
+                               version_sort_key)
 
 BULLETIN_LIST_URL = ("https://www.hiascend.com/ascendgateway/ascendservice/"
                      "bulletins/front/list")
@@ -221,7 +222,8 @@ def buildability(version, kind, policy, base_url, chips):
         return False, "", "no OBS directory found for this beta", []
 
     prefix = cann_url_prefix(base_url, version, kind)
-    missing, unknown = check_files(prefix, files, missing_statuses)
+    missing, unknown = check_files(prefix, files, missing_statuses,
+                                   probe_settings(policy))
     if unknown:
         raise AvailabilityUnknown(
             f"probing {prefix} answered unclearly: {unknown[:3]}")
