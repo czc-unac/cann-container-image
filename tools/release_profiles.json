@@ -34,7 +34,27 @@
       "Ascend-cann-{chip}-ops_{version}_linux-{arch}.run"
     ],
     "beta_scan_max": 600,
-    "missing_statuses": [403, 404]
+    "missing_statuses": [403, 404],
+    "probe": {
+      "comment": [
+        "HTTP probe policy. Unknown answers (timeout, connection reset,",
+        "5xx) are retried with exponential backoff plus jitter; only when",
+        "every attempt stays unknown does the caller fail, so gateway",
+        "flakiness never degrades into a silent 'missing'. Concurrency is",
+        "deliberately low because OBS resets connections when hit hard",
+        "from CI runners; beta directory scans run in batches of the same",
+        "size and stop as soon as a complete directory is found.",
+        "unknown_budget bounds the damage when the gateway itself is down:",
+        "a scan aborts as soon as that many candidate directories answer",
+        "unclearly, instead of retrying its way through all 600 candidates",
+        "and burning the runner's whole time budget."
+      ],
+      "timeout_seconds": 30,
+      "workers": 4,
+      "retries": 4,
+      "backoff_seconds": 0.5,
+      "unknown_budget": 8
+    }
   },
   "beta_requires_link_id": true,
   "link_id_pattern": "^\\d+\\.\\d+\\.T\\d+$"

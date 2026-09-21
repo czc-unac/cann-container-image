@@ -47,7 +47,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cann_availability import (cann_url_prefix, check_files, obs_base_url,
-                               required_files, version_sort_key)
+                               probe_settings, required_files,
+                               version_sort_key)
 from check_cann_release import is_known, known_tokens
 
 PROFILES_JSON = os.path.join("tools", "release_profiles.json")
@@ -149,7 +150,8 @@ def probe_packages(version, kind, link_id, policy, chips):
     files = required_files(availability, version, chips)
     prefix = cann_url_prefix(base_url, version, kind, link_id)
     missing, unknown = check_files(prefix, files,
-                                   availability["missing_statuses"])
+                                   availability["missing_statuses"],
+                                   probe_settings(availability))
     if unknown:
         abort(EXIT_UNAVAILABLE, f"OBS probe inconclusive for {prefix}: "
                                 f"{unknown[:3]}; retry later")

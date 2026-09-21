@@ -14,9 +14,16 @@ Status semantics (probed with anonymous HEAD requests):
 * 200            -> present
 * 403/404        -> missing (OBS answers 403 for keys of public buckets)
 * anything else,
-  or a timeout   -> unknown: the probe could not decide. Callers must treat
-                    unknown as an error, never as "missing", so a transient
-                    OBS hiccup can not silently suppress a real release.
+  or a timeout   -> unknown: retried with exponential backoff (see the
+                    "probe" policy in tools/release_profiles.json) and only
+                    then reported. Callers must treat unknown as an error,
+                    never as "missing", so a transient OBS hiccup can not
+                    silently suppress a real release - the retries are what
+                    keep that strictness practical on CI runners.
+
+Beta scans proceed in batches and stop at the first complete directory, so
+finding 9.2.T1/T3 costs a couple of batches rather than a 600-candidate
+sweep against the bucket.
 
 Announced-but-incomplete releases (e.g. CANN 9.1.0-beta.2, whose ops
 archives for 910b/310p/A3/910 were never uploaded) are the reason this
@@ -25,13 +32,23 @@ generator must refuse to build them.
 """
 import json
 import os
+import random
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-DEFAULT_TIMEOUT = 20
-DEFAULT_WORKERS = 12
+# Fallback probe policy; release_profiles.json "availability"."probe"
+# overrides these. Deliberately conservative: OBS resets connections when
+# hammered from CI runners, and unknown answers cost retries.
+DEFAULT_PROBE = {
+    "timeout_seconds": 30,
+    "workers": 4,
+    "retries": 4,
+    "backoff_seconds": 0.5,
+    "unknown_budget": 8,
+}
 
 PRESENT = "present"
 MISSING = "missing"
@@ -40,6 +57,13 @@ UNKNOWN = "unknown"
 
 class AvailabilityUnknown(RuntimeError):
     """At least one probe could not be decided (timeout, 5xx, ...)."""
+
+
+def probe_settings(policy):
+    """Probe policy from the availability section, with safe defaults."""
+    settings = dict(DEFAULT_PROBE)
+    settings.update(policy.get("probe", {}))
+    return settings
 
 
 def version_sort_key(version):
@@ -123,27 +147,44 @@ def beta_dir_candidates(version, scan_max):
     return [f"{match.group(1)}.T{n}" for n in range(1, scan_max + 1)]
 
 
-def _probe(url, missing_statuses, timeout):
-    """(state, detail) for one HEAD request; never raises."""
-    try:
-        resp = requests.head(url, timeout=timeout, allow_redirects=True)
-    except requests.RequestException as exc:
-        return UNKNOWN, str(exc)
-    if resp.status_code == 200:
-        return PRESENT, ""
-    if resp.status_code in missing_statuses:
-        return MISSING, f"HTTP {resp.status_code}"
-    return UNKNOWN, f"HTTP {resp.status_code}"
+def _probe(url, missing_statuses, timeout, retries, backoff_seconds):
+    """(state, detail) for one HEAD request, retried while unknown.
+
+    200 and the missing statuses are authoritative and returned at once;
+    timeouts, connection resets and other statuses are retried with
+    exponential backoff plus jitter. Only an answer that stays unknown
+    across every attempt is reported as UNKNOWN to the caller.
+    """
+    detail = ""
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.head(url, timeout=timeout, allow_redirects=True)
+        except requests.RequestException as exc:
+            detail = str(exc)
+        else:
+            if resp.status_code == 200:
+                return PRESENT, ""
+            if resp.status_code in missing_statuses:
+                return MISSING, f"HTTP {resp.status_code}"
+            detail = f"HTTP {resp.status_code}"
+        if attempt < retries:
+            time.sleep(backoff_seconds * (2 ** attempt)
+                       + random.uniform(0, backoff_seconds))
+    return UNKNOWN, detail
 
 
-def check_files(prefix, files, missing_statuses,
-                timeout=DEFAULT_TIMEOUT, workers=DEFAULT_WORKERS):
+def check_files(prefix, files, missing_statuses, settings=None):
     """Probe prefix/<file> for every file; returns (missing, unknown)."""
+    settings = settings or dict(DEFAULT_PROBE)
+
     def one(name):
-        state, detail = _probe(f"{prefix}/{name}", missing_statuses, timeout)
+        state, detail = _probe(f"{prefix}/{name}", missing_statuses,
+                               settings["timeout_seconds"],
+                               settings["retries"],
+                               settings["backoff_seconds"])
         return name, state, detail
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with ThreadPoolExecutor(max_workers=settings["workers"]) as pool:
         results = list(pool.map(one, files))
     missing = [name for name, state, _ in results if state == MISSING]
     unknown = [(name, detail) for name, state, detail in results
@@ -154,40 +195,58 @@ def check_files(prefix, files, missing_statuses,
 def scan_beta(base_url, version, files, policy, missing_statuses):
     """Locate the OBS directory of a beta version and test completeness.
 
-    Returns (buildable_dir, discovered_dirs, incomplete{dir: missing list}).
+    Candidates are scanned in batches of ``workers`` and the search stops
+    the moment a directory turns out complete, so a beta whose directory
+    sorts early (the common case: 9.2.T1, 9.2.T3) costs two batches
+    instead of a whole-range sweep. Returns (buildable_dir,
+    discovered_dirs, incomplete{dir: missing list}).
+
     Raises AvailabilityUnknown when the toolkit was never found and at
-    least one candidate directory answered unclearly, so a flaky gateway
-    cannot turn into a silent "not buildable".
+    least one candidate answered unclearly, so a flaky gateway cannot turn
+    into a silent "not buildable". The scan also aborts as soon as
+    ``unknown_budget`` candidates answer unclearly: with retries a fully
+    unreachable gateway would otherwise walk all 600 candidates and burn
+    the runner's time budget.
     """
+    settings = probe_settings(policy)
     toolkit = next(name for name in files
                    if name.startswith("Ascend-cann-toolkit_"))
     candidates = beta_dir_candidates(version, policy["beta_scan_max"])
 
     def probe_toolkit(candidate):
         state, _ = _probe(f"{base_url}/CANN/CANN%20{candidate}/{toolkit}",
-                          missing_statuses, DEFAULT_TIMEOUT)
+                          missing_statuses, settings["timeout_seconds"],
+                          settings["retries"], settings["backoff_seconds"])
         return candidate, state
 
-    with ThreadPoolExecutor(max_workers=DEFAULT_WORKERS) as pool:
-        hits = list(pool.map(probe_toolkit, candidates))
-    found = [candidate for candidate, state in hits if state == PRESENT]
-    unknown = [candidate for candidate, state in hits if state == UNKNOWN]
-
-    buildable = None
+    batch = settings["workers"]
+    found = []
     incomplete = {}
-    for candidate in found:
-        prefix = f"{base_url}/CANN/CANN%20{candidate}"
-        missing, unk = check_files(prefix, files, missing_statuses)
-        if unk:
+    unknown = []
+    for start in range(0, len(candidates), batch):
+        chunk = candidates[start:start + batch]
+        with ThreadPoolExecutor(max_workers=batch) as pool:
+            hits = list(pool.map(probe_toolkit, chunk))
+        found.extend(c for c, state in hits if state == PRESENT)
+        unknown.extend(c for c, state in hits if state == UNKNOWN)
+        if len(unknown) >= settings["unknown_budget"]:
             raise AvailabilityUnknown(
-                f"probing {prefix} answered unclearly: {unk[:3]}")
-        if not missing:
-            buildable = candidate
-            break
-        incomplete[candidate] = missing
+                f"{len(unknown)} candidate directories did not answer while "
+                f"scanning {version}; the OBS gateway looks unreachable "
+                f"(first: {unknown[:3]})")
+        for candidate in [c for c, state in hits if state == PRESENT]:
+            prefix = f"{base_url}/CANN/CANN%20{candidate}"
+            missing, unk = check_files(prefix, files, missing_statuses,
+                                       settings)
+            if unk:
+                raise AvailabilityUnknown(
+                    f"probing {prefix} answered unclearly: {unk[:3]}")
+            if not missing:
+                return candidate, found, incomplete
+            incomplete[candidate] = missing
 
-    if buildable is None and not found and unknown:
+    if not found and unknown:
         raise AvailabilityUnknown(
             f"{len(unknown)} candidate directories did not answer, "
             f"e.g. {unknown[:3]}")
-    return buildable, found, incomplete
+    return None, found, incomplete

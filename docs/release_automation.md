@@ -174,10 +174,30 @@ monitor (which must not report unpackaged announcements) and by the generator
 |---|---|---|
 | HTTP 200 | `present` | file counted as available |
 | HTTP 403 / 404 (configurable) | `missing` | contributes to `missing` |
-| anything else (5xx) or timeout | `unknown` | **raises** — never counted as missing |
+| anything else (5xx) or timeout/reset | `unknown` | retried with exponential backoff + jitter; only if every attempt stays unknown does the caller **raise** — never counted as missing |
 
 The unknown rule is the core safety property: a flaky gateway must not turn
 into a silently suppressed release, nor into a silently rejected generation.
+The retries are what make that strictness practical on CI runners, which
+reset or time out on OBS under load (observed in the first fork rehearsal:
+2 of 14 probes flaked on a single run).
+
+### Probe policy
+
+Configured under `availability.probe` in `tools/release_profiles.json`:
+
+| Setting | Default | Why |
+|---|---|---|
+| `timeout_seconds` | 30 | single HEAD budget; CI runners need more than the local default |
+| `workers` | 4 | deliberately low: OBS resets connections when hammered |
+| `retries` | 4 | extra attempts for unknown answers only (backoff 0.5s, 1s, 2s, 4s + jitter) |
+| `backoff_seconds` | 0.5 | base for the exponential backoff |
+| `unknown_budget` | 8 | abort a beta scan once this many candidate directories answer unclearly, so an unreachable gateway cannot retry its way through all 600 candidates and burn the runner's time budget |
+
+Beta scans run in batches of `workers` and **stop at the first complete
+directory**, so the common case (the directory sorts early: `9.2.T1`,
+`9.2.T3`) costs one batch plus the 14-file completeness check instead of a
+600-candidate sweep.
 
 ### Required file set
 
@@ -205,18 +225,23 @@ spelling, so `A3` stays uppercase in the file name.
 | `required_files(policy, version, chips)` | builds the archive list described above |
 | `cann_url_prefix(base_url, version, kind, link_id)` | beta → `CANN%20<link_id>`; stable → `CANN%20<version>`; mirrors `template.py` |
 | `beta_dir_candidates(version, scan_max)` | `9.1.0-beta.2` → `['9.1.T1', …, '9.1.T600']` (bound from policy) |
-| `_probe(url, missing_statuses, timeout)` | one HEAD request, never raises, returns `(state, detail)` |
-| `check_files(prefix, files, missing, …)` | parallel HEADs (12 workers) for a full file list, returns `(missing, unknown)` |
+| `_probe(url, missing_statuses, timeout, retries, backoff)` | one HEAD request, retried with backoff while unknown; never raises, returns `(state, detail)` |
+| `check_files(prefix, files, missing, settings)` | parallel HEADs under the probe policy, returns `(missing, unknown)` |
 | `scan_beta(base_url, version, files, policy, missing_statuses)` | see algorithm below |
 
 ### `scan_beta` algorithm (beta versions have no derivable directory)
 
-1. Probe only the toolkit file for every candidate `x.y.Tn`, in parallel.
-2. Directories answering 200 are "found"; ambiguous answers are remembered.
+1. Walk candidate `x.y.Tn` directories in batches of `workers` (4), probing
+   only the toolkit file. The walk stops as soon as a complete directory is
+   found, so the usual case costs one or two batches rather than a full sweep.
+2. Within a batch, directories answering 200 are "found"; unclear answers are
+   counted against `unknown_budget` (8) — reaching it aborts the scan with
+   `AvailabilityUnknown`, which keeps an unreachable gateway from retrying its
+   way through all 600 candidates.
 3. For each found directory, probe the **full** 14-file set.
-   * all present → return that directory as buildable (fast path stops early);
-   * any unknown → raise `AvailabilityUnknown`;
-   * otherwise record the directory's missing files.
+   * all present → return that directory as buildable (fast path);
+   * any unknown → raise `AvailabilityUnknown` (after the probe retries);
+   * otherwise record the directory's missing files and keep scanning.
 4. If nothing was found and some candidates answered unknown → raise. So a
    gateway outage cannot be mistaken for "no directory exists".
 5. Otherwise the version is genuinely not buildable (e.g. `9.1.0-beta.2`,
@@ -370,7 +395,14 @@ notifications.
       "Ascend-cann-{chip}-ops_{version}_linux-{arch}.run"
     ],
     "beta_scan_max": 600,
-    "missing_statuses": [403, 404]
+    "missing_statuses": [403, 404],
+    "probe": {
+      "timeout_seconds": 30,
+      "workers": 4,
+      "retries": 4,
+      "backoff_seconds": 0.5,
+      "unknown_budget": 8
+    }
   },
   "beta_requires_link_id": true,
   "link_id_pattern": "^\\d+\\.\\d+\\.T\\d+$"
