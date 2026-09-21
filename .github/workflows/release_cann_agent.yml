@@ -2,12 +2,15 @@ name: release-cann-agent
 
 # Half-automation companion of check_cann_release.yml: the daily bulletin
 # monitor opens one "New CANN release detected: <version>" issue per
-# uncovered version; a maintainer replies on that issue with
+# uncovered version; the maintainer replies on that issue with
 #   /release-cann <version>              (stable)
 #   /release-cann <version> <x.y.Tn>     (beta, OBS link-id)
-# and this workflow runs tools/gen_cann_release.py, gates the result and
-# pushes a branch plus a draft PR. Nothing is ever published; building and
-# pushing images stay manual workflow_dispatch exactly as before.
+# and this workflow generates the release change-set, gates it, and pushes a
+# branch to this repository. It deliberately stops there: the branch is based
+# on the upstream release repository (Ascend/cann-container-image), so the
+# maintainer opens the upstream PR from the compare link posted back on the
+# issue. Nothing is ever published; building and pushing images stay manual
+# workflow_dispatch exactly as before.
 
 on:
   issue_comment:
@@ -24,7 +27,6 @@ on:
 permissions:
   contents: write
   issues: write
-  pull-requests: write
 
 concurrency:
   group: release-cann-agent
@@ -50,8 +52,8 @@ jobs:
       ISSUE_TITLE: ${{ github.event.issue.title }}
       DISPATCH_VERSION: ${{ github.event.inputs.version }}
       DISPATCH_LINK_ID: ${{ github.event.inputs.link_id }}
-      PR_TARGET_REPO: ${{ vars.RELEASE_PR_TARGET_REPO }}
-      PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+      UPSTREAM_REPO: ${{ vars.RELEASE_UPSTREAM_REPO || 'Ascend/cann-container-image' }}
+      UPSTREAM_REF: ${{ vars.RELEASE_UPSTREAM_REF || 'main' }}
       RELEASE_GIT_NAME: ${{ vars.RELEASE_GIT_NAME }}
       RELEASE_GIT_EMAIL: ${{ vars.RELEASE_GIT_EMAIL }}
     steps:
@@ -75,7 +77,7 @@ jobs:
               exit 1
             fi
           fi
-          # Only validated tokens ever reach git/gh/python argument lists.
+          # Only validated tokens ever reach git/python argument lists.
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
             echo "REJECT_VERSION" >&2
             echo "invalid version '$version' for auto-release; irregular names" \
@@ -93,6 +95,7 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "link_id=$link_id" >> "$GITHUB_OUTPUT"
+          echo "branch=release-cann-$version" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -100,9 +103,11 @@ jobs:
           # ymls (their workflow_dispatch version lists), and GitHub refuses
           # to let the built-in GITHUB_TOKEN create or update workflow
           # files. RELEASE_PUSH_TOKEN is a fine-grained PAT scoped to this
-          # repository with Contents and Workflows read+write; the push
-          # step below preflights that combination.
+          # repository with Contents and Workflows read+write.
           token: ${{ secrets.RELEASE_PUSH_TOKEN || github.token }}
+          # A full fetch: the generated branch sits on top of upstream and
+          # the push that follows must carry every object the fork lacks.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -110,6 +115,24 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Preflight - push token can touch workflow files
+        env:
+          PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "::error::RELEASE_PUSH_TOKEN is not configured. Every release change-set updates .github/workflows/*, and GitHub never allows the built-in GITHUB_TOKEN to touch workflow files. Add a fine-grained PAT scoped to this repository with Contents: Read and write and Workflows: Read and write."
+            exit 1
+          fi
+
+      - name: Prepare upstream state
+        env:
+          BRANCH: ${{ steps.args.outputs.branch }}
+        run: |
+          set -euo pipefail
+          bash tools/prepare_upstream_state.sh \
+            "https://github.com/$UPSTREAM_REPO.git" "$UPSTREAM_REF" "$BRANCH"
 
       - name: Generate the release change-set
         env:
@@ -119,31 +142,50 @@ jobs:
           set -euo pipefail
           gen_args=("$VERSION")
           [ -n "$LINK_ID" ] && gen_args+=(--link-id "$LINK_ID")
-          python3 tools/gen_cann_release.py "${gen_args[@]}" | tee /tmp/gen.log
+          python3 /tmp/cann-tools/gen_cann_release.py "${gen_args[@]}" \
+            | tee /tmp/gen.log
 
-      - name: Gate - only release-owned paths may change
+      - name: Gate - stage only release-owned paths
         run: |
           set -euo pipefail
-          git ls-files --others --exclude-standard > /tmp/untracked
-          { git diff --name-only; cat /tmp/untracked; } | sort -u > /tmp/touched
-          grep -v -E '^(tools/template\.py|build_(cann|manylinux)_arg\.json|cann_publish_version\.json|manylinux_publish_version\.json|OVERVIEW\.(md|zh\.md)|supported_tags\.md|\.github/workflows/(batch_)?build_and_push_(cann|manylinux)\.yml|cann/|manylinux/)' \
-            /tmp/touched > /tmp/foreign || true
-          if [ -s /tmp/foreign ]; then
-            echo "generator touched unexpected paths:" >&2
+          release_paths=(
+            tools/template.py
+            build_cann_arg.json
+            build_manylinux_arg.json
+            cann_publish_version.json
+            manylinux_publish_version.json
+            OVERVIEW.md
+            OVERVIEW.zh.md
+            supported_tags.md
+            .github/workflows/build_and_push_cann.yml
+            .github/workflows/build_and_push_manylinux.yml
+            .github/workflows/batch_build_and_push_cann.yml
+            .github/workflows/batch_build_and_push_manylinux.yml
+            cann
+            manylinux
+          )
+          git add -A -- "${release_paths[@]}"
+          git diff --cached --name-only > /tmp/staged
+          if [ ! -s /tmp/staged ]; then
+            echo "::error::the generator staged no changes; refusing to continue"
+            exit 1
+          fi
+          if grep -v -E '^(tools/template\.py|build_(cann|manylinux)_arg\.json|cann_publish_version\.json|manylinux_publish_version\.json|OVERVIEW\.(md|zh\.md)|supported_tags\.md|\.github/workflows/(batch_)?build_and_push_(cann|manylinux)\.yml|cann/|manylinux/)' \
+               /tmp/staged > /tmp/foreign; then
+            echo "::error::staged paths outside the release allowlist:" >&2
             cat /tmp/foreign >&2
             exit 1
           fi
-          git diff --check
-          echo "gate passed: $(wc -l < /tmp/touched) files, all release-owned"
+          git diff --cached --check
+          echo "gate passed: $(wc -l < /tmp/staged) release files staged"
 
       - name: Gate - repository now covers the version
         env:
           VERSION: ${{ steps.args.outputs.version }}
         run: |
           set -euo pipefail
-          python3 - "$VERSION" <<'PY'
+          PYTHONPATH=/tmp/cann-tools python3 - "$VERSION" <<'PY'
           import sys
-          sys.path.insert(0, "tools")
           from check_cann_release import is_known, known_tokens
           version = sys.argv[1]
           if not is_known(version, known_tokens()):
@@ -151,71 +193,51 @@ jobs:
           print(f"coverage gate passed for {version}")
           PY
 
-      - name: Commit, push branch and open draft PR
-        id: pr
+      - name: Commit, push the branch and report the compare link
+        id: release
         env:
           VERSION: ${{ steps.args.outputs.version }}
           LINK_ID: ${{ steps.args.outputs.link_id }}
-          PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN }}
-          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.args.outputs.branch }}
         run: |
           set -euo pipefail
-          branch="release-cann-$VERSION"
-
-          # GitHub blocks the built-in GITHUB_TOKEN from creating or
-          # updating files under .github/workflows/, and the release
-          # change-set always touches them, so fail with the exact fix
-          # instead of surfacing the remote rejection later.
-          if git status --porcelain | grep -q '\.github/workflows/'; then
-            if [ -z "$PUSH_TOKEN" ]; then
-              echo "::error::the change-set updates .github/workflows/* but no RELEASE_PUSH_TOKEN secret is configured; GitHub never allows the built-in GITHUB_TOKEN to touch workflow files. Add a fine-grained PAT scoped to this repository with Contents: Read and write and Workflows: Read and write."
-              exit 1
-            fi
-          fi
-
           git config user.name "${RELEASE_GIT_NAME:-$GITHUB_ACTOR}"
           git config user.email "${RELEASE_GIT_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}"
-          git checkout -B "$branch"
-          git add -A
           git commit -s -m "Add CANN $VERSION images" -m \
           "Generated by tools/gen_cann_release.py${LINK_ID:+ with OBS link-id $LINK_ID}
-          from the /release-cann trigger in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
-          git push -f origin "$branch"
+          on top of $UPSTREAM_REPO@$UPSTREAM_REF, from the /release-cann trigger in
+          run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+          git push -f origin "$BRANCH"
 
-          target="${PR_TARGET_REPO:-$GITHUB_REPOSITORY}"
-          pr_body="Auto-generated from the CANN release monitor.
-
-          - Version: \`$VERSION\`${LINK_ID:+ / OBS directory: \`$LINK_ID\`}
-          - Generator: \`tools/gen_cann_release.py\` (golden-replay verified)
-          - Build/publish stay manual: run the batch workflow_dispatch after merge."
-          if [ -n "$PR_TOKEN" ]; then
-            GH_TOKEN="$PR_TOKEN"
-          fi
-          if pr_url=$(gh pr create --repo "$target" --base main \
-              --head "$GITHUB_REPOSITORY_OWNER:$branch" --draft \
-              --title "Add CANN $VERSION images" --body "$pr_body" 2>/tmp/pr.err); then
-            echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
-            echo "opened $pr_url"
-          else
-            echo "branch pushed; PR creation failed:" >&2
-            cat /tmp/pr.err >&2
-            echo "pr_url=https://github.com/$target/compare/main...$GITHUB_REPOSITORY_OWNER:$branch?expand=1&draft=1" >> "$GITHUB_OUTPUT"
-          fi
+          base="$(git rev-parse "$BRANCH^")"
+          compare="$GITHUB_SERVER_URL/$UPSTREAM_REPO/compare/$UPSTREAM_REF...$GITHUB_REPOSITORY_OWNER:$BRANCH?expand=1&draft=1"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "files=$(wc -l < /tmp/staged)" >> "$GITHUB_OUTPUT"
+          echo "compare=$compare" >> "$GITHUB_OUTPUT"
+          echo "pushed $BRANCH at base $(git rev-parse --short "$base")"
+          echo "compare link: $compare"
 
       - name: Report back to the notification issue
         if: always() && github.event_name == 'issue_comment'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.args.outputs.version }}
-          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          BRANCH: ${{ steps.release.outputs.branch || steps.args.outputs.branch }}
+          BASE: ${{ steps.release.outputs.base }}
+          FILES: ${{ steps.release.outputs.files }}
+          COMPARE: ${{ steps.release.outputs.compare }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ "${{ job.status }}" = "success" ]; then
-            body="Draft PR generated for \`$VERSION\`: $PR_URL (run: $RUN_URL).
-          Review, then mark ready and merge; build/publish remain manual."
+            body="Branch \`$BRANCH\` is ready in \`$GITHUB_REPOSITORY\` ($FILES files, based on \`$UPSTREAM_REPO@$UPSTREAM_REF\` at \`${BASE:0:12}\`).
+
+          Open the upstream PR: $COMPARE
+
+          Build/publish stay manual; merge upstream first, then run the batch workflow_dispatch."
           else
-            body="Could not auto-generate the release PR for \`$VERSION\` this run ($RUN_URL).
+            body="Could not generate the release change-set for \`$VERSION\` this run ($RUN_URL).
           See the job log; irregular version naming or OBS gaps need the manual skill flow."
           fi
           gh issue comment "${{ github.event.issue.number }}" --body "$body"
