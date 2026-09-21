@@ -21,7 +21,7 @@ existing `workflow_dispatch` release flow is untouched.
 | Package gate | `tools/cann_availability.py` | Shared OBS availability probe used by both sides |
 | Generator | `tools/gen_cann_release.py` | Deterministic release change-set generator |
 | Policy | `tools/release_profiles.json`, `tools/release_matrix.json` | Naming/link-id policy and matrix drift baseline |
-| Trigger | `.github/workflows/release_cann_agent.yml` | `/release-cann` comment → generation → gates → branch → draft PR |
+| Trigger | `.github/workflows/release_cann_agent.yml` | `/release-cann` comment → generation on an upstream base → gates → branch pushed here + compare link for the upstream PR |
 | Docs | `.claude/skills/release-cann-image/SKILL.md` | Skill now leads with the generator; manual steps kept as fallback |
 | Misc | `requirements.txt` (`requests`), `.gitignore` (`__pycache__`, `*.pyc`) | `template.py` already imported `requests` undeclared; the generator imports tool modules, so its bytecode must not enter commits |
 
@@ -47,14 +47,17 @@ existing `workflow_dispatch` release flow is untouched.
   +-----------------------------------+
   | release-cann-agent.yml            |
   |   parse+validate trigger          |
+  |   align worktree to upstream      |  <-- tools/prepare_upstream_state.sh
   |   tools/gen_cann_release.py ------+--> tools/cann_availability.py (exact dir)
-  |   gate: path allowlist            |
+  |   gate: stage only release paths  |
   |   gate: coverage re-check         |
-  |   commit -s / push / draft PR     |
+  |   commit -s / push branch here    |
   +-----------------------------------+
         |
         v
-  draft PR "Add CANN <version> images"   (merge + workflow_dispatch build stay manual)
+  branch "release-cann-<version>" in this repository, based on upstream main
+  + maintainer opens the upstream PR from the posted compare link
+  (merge + workflow_dispatch build stay manual)
 ```
 
 Two workflows, three Python modules, two JSON policy files. There is no
@@ -75,8 +78,9 @@ concurrency: {group: cann-release-check, cancel-in-progress: false}
 
 | Step | What it does | Why it is shaped this way |
 |---|---|---|
-| `actions/checkout` + `setup-python 3.11` + `pip install -r requirements.txt` | standard environment | `requirements.txt` pins `jinja2`, `requests` |
-| **Check for new CANN releases** | `python3 tools/check_cann_release.py --check > /tmp/report.json`, echoes it | the script never talks to GitHub; all issue work lives in later steps, so the detection logic is testable locally |
+| `actions/checkout` + `setup-python 3.11` + `pip install -r requirements.txt` | standard environment (full-history checkout) | `requirements.txt` pins `jinja2`, `requests`; the alignment below needs real history |
+| **Prepare upstream state** | `tools/prepare_upstream_state.sh <upstream> <ref> upstream-base` | the monitor must judge coverage against the repository the release PR targets, not against the fork's possibly stale copy |
+| **Check for new CANN releases** | `PYTHONPATH=/tmp/cann-tools python3 /tmp/cann-tools/check_cann_release.py --check > /tmp/report.json`, echoes it | the script never talks to GitHub; all issue work lives in later steps, so the detection logic is testable locally |
 | **Open one notification issue per version** | loops over `new_versions` (`@tsv`: version, publishTime, oss_dir), builds the body, creates the issue only if an exact-titled open one is absent | one thread per version keeps trigger comments, reports and PR links together; see "issue lifecycle" below |
 | **Close notifications whose versions are covered** | lists open issues matching the title prefix, parses the version from the title, closes those no longer in `new_versions` with a comment | per-version close granularity; a version that becomes covered closes its own issue only |
 | **Report announced-but-incomplete versions** | renders `announced_not_buildable` into `$GITHUB_STEP_SUMMARY` | visibility without issue noise: CANN-side incomplete is not actionable |
@@ -86,8 +90,8 @@ concurrency: {group: cann-release-check, cancel-in-progress: false}
 
 * Title: `New CANN release detected: <version>`.
 * Dedup uses `gh issue list --search "\"$title\" in:title"` **plus** an exact
-  match in the built-in jq:
-  `--json number,title -q --arg t "$title" '[.[] | select(.title == $t) | .number][0] // empty'`.
+  title match performed by the runner's real jq:
+  `gh issue list ... --json number,title | jq -r --arg t "$title" '[.[] | select(.title == $t) | .number][0] // empty'`.
   The `in:title` search is token-prefix based, so without the exact-match
   guard a query for `9.3.0` can prefix-hit an issue for `9.3.0-beta.1`.
 * The body is static per version (version, bulletin publish time, usage hint,
@@ -105,7 +109,7 @@ on:
   issue_comment: {types: [created]}
   workflow_dispatch:
     inputs: {version, link_id}
-permissions: {contents: write, issues: write, pull-requests: write}
+permissions: {contents: write, issues: write}
 concurrency: {group: release-cann-agent, cancel-in-progress: false}
 env: {PYTHONDONTWRITEBYTECODE: 1}
 ```
@@ -116,7 +120,7 @@ Job-level guard (`if`) — all of the following must hold for an
 | Condition | Reason |
 |---|---|
 | `github.event.issue.pull_request == null` | comments on PRs must never trigger it |
-| `author_association == 'OWNER'` and `comment.user.login == github.repository_owner` | the generation path writes to the repo and opens PRs; only the owner may invoke it |
+| `author_association == 'OWNER'` and `comment.user.login == github.repository_owner` | the generation path pushes branches and writes to the repository; only the owner may invoke it |
 | `startsWith(issue.title, 'New CANN release detected: ')` | only monitor-created issues are trigger surfaces |
 | `startsWith(comment.body, '/release-cann ')` | explicit command, no accidental matches |
 
@@ -131,32 +135,42 @@ Job-level guard (`if`) — all of the following must hold for an
    (the OBS directory cannot be derived from the version string); stable
    releases must not carry one. Validated values leave the step as
    `$GITHUB_OUTPUT`s, never as raw interpolation.
-2. **Generate the release change-set.** `python3 tools/gen_cann_release.py
-   <version> [--link-id <id>]`, output teed to the log.
-3. **Gate A — only release-owned paths may change.** Unions tracked
-   modifications and untracked files, then fails if any path is outside:
-   `tools/template.py`, `build_(cann|manylinux)_arg.json`,
+2. **Align the worktree to upstream.** `tools/prepare_upstream_state.sh
+   <upstream-url> <ref> <branch>` copies the automation tools to
+   `/tmp/cann-tools`, fetches the upstream ref, force-creates the release
+   branch at that commit, and restores the policy files into `tools/` as
+   untracked files. The generated branch therefore sits directly on upstream's
+   main, which is what the maintainer's upstream PR needs: the fork's own
+   divergence never enters the diff.
+3. **Generate the release change-set.** `python3
+   /tmp/cann-tools/gen_cann_release.py <version> [--link-id <id>]` with the
+   repository root as the working directory, output teed to the log.
+4. **Gate A — stage only release-owned paths.** The release paths
+   (`tools/template.py`, `build_(cann|manylinux)_arg.json`,
    `*_publish_version.json`, `OVERVIEW.{md,zh.md}`, `supported_tags.md`,
    `.github/workflows/(batch_)?build_and_push_(cann|manylinux).yml`, `cann/`,
-   `manylinux/`. Also runs `git diff --check` for whitespace errors.
-4. **Gate B — the repository now covers the version.** Re-imports
-   `tools/check_cann_release.py` and asserts `is_known(version, known_tokens())`.
-   A generation that silently failed to register the version cannot reach the
-   push.
-5. **Commit, push branch, open draft PR.** `git checkout -B
-   release-cann-<version>`, `git add -A`, `git commit -s -m "Add CANN
-   <version> images"` with a body naming the generator and the triggering run.
-   Identity comes from `vars.RELEASE_GIT_NAME` / `vars.RELEASE_GIT_EMAIL`
-   (must be the CLA-signed email). Branch is force-pushed (re-runs are
-   idempotent), then:
-   * target = `vars.RELEASE_PR_TARGET_REPO` or this repository;
-   * `gh pr create --draft --head <owner>:<branch>`, using
-     `secrets.RELEASE_PR_TOKEN` when set;
-   * if PR creation fails (e.g. cross-repo without a PAT), the run still
-     succeeds and reports a `compare?...&draft=1` link instead.
-6. **Report back to the notification issue** (`if: always()`): success posts
-   the PR link plus "build/publish remain manual"; failure points at the run
-   log and the manual skill flow.
+   `manylinux/`) are staged explicitly — never `git add -A`, which would
+   swallow the untracked policy files — then the staged set must be non-empty,
+   entirely inside the allowlist, and free of whitespace errors.
+5. **Gate B — the repository now covers the version.** Runs the copied
+   `tools/check_cann_release.py` (via `PYTHONPATH=/tmp/cann-tools`) and
+   asserts `is_known(version, known_tokens())`. A generation that silently
+   failed to register the version cannot reach the push.
+6. **Commit and push the branch.** `git commit -s -m "Add CANN <version>
+   images"` with a body naming the generator, the upstream base and the
+   triggering run; identity comes from `vars.RELEASE_GIT_NAME` /
+   `vars.RELEASE_GIT_EMAIL` (must be the CLA-signed email). The branch is
+   force-pushed to this repository with `secrets.RELEASE_PUSH_TOKEN`, because
+   GitHub never lets the built-in token update workflow files.
+7. **Report back to the notification issue** (`if: always()`): success posts
+   the branch name, the upstream base commit, the file count and a ready
+   `compare/<ref>...<owner>:<branch>?expand=1&draft=1` link, so the maintainer
+   opens the upstream PR in one click; failure points at the run log and the
+   manual skill flow.
+
+The workflow deliberately stops at the branch. Opening the upstream PR stays
+a human action (one click on the posted link), which keeps a privileged
+cross-repository token out of the picture entirely.
 
 Note: `issue_comment` and `schedule` triggers only fire from the repository's
 **default branch**, so both workflows activate after this lands on `main`;
@@ -436,9 +450,10 @@ an arch list is a config change, never a code change.
 * **Fail loud on ambiguity.** Unknown probe results, empty bulletin payloads
   and unreproducible formatting all abort; none of them degrade into a silent
   "nothing to do".
-* **Human gate at the trigger.** Detection is automatic; releasing is a
-  deliberate `/release-cann` comment by the owner, and the output is always a
-  draft PR.
+* **Human gate at the trigger, and at the upstream PR.** Detection is
+  automatic; generating is a deliberate `/release-cann` comment by the owner;
+  and the automation stops at a branch in this repository so opening the
+  upstream PR stays a one-click human action.
 
 ## Verification
 
@@ -457,6 +472,13 @@ an arch list is a config change, never a code change.
 - **Issue routing**: replayed against a `gh` stub — create/skip/close and the
   not-buildable summary all behave as intended, including the
   `9.3.0` vs `9.3.0-beta.1` prefix trap.
+- **Upstream-based walk-through**: with the repository standing in for
+  upstream and its `main` (814c9cfa) as the ref,
+  `prepare_upstream_state.sh` → generation → explicit staging produced the
+  release branch with **only** release-owned paths staged (no automation or
+  policy files), and the staged tree is byte-identical to the real release
+  commit `a36525fb` once the Windows-only installer-URL slash style is
+  normalized (CI runs on Linux, where `template.py` emits the correct form).
 - All workflow `run` blocks pass `bash -n`; both YAML files parse.
 
 ## Permissions and configuration footprint
@@ -464,12 +486,14 @@ an arch list is a config change, never a code change.
 | Item | Required for | Notes |
 |---|---|---|
 | `issues: write` | notification issues | monitor workflow |
-| `contents: write`, `pull-requests: write` | branch + draft PR | agent workflow, runs in this repository |
-| `vars.RELEASE_GIT_NAME` / `RELEASE_GIT_EMAIL` | commit identity | must be the CLA-signed email, otherwise `ascend-cla/no` blocks the PR |
-| `secrets.RELEASE_PUSH_TOKEN` | pushing the generated branch | **required**: fine-grained PAT scoped to this repository with **Contents: Read and write** and **Workflows: Read and write**. Every release change-set updates the four build/push workflow ymls (their `workflow_dispatch` version lists), and the built-in `GITHUB_TOKEN` can never create or update files under `.github/workflows/`, so a plain-token push is rejected by GitHub. `actions/checkout` uses this token when present; the push step fails early with the exact scopes to grant when it is missing and the change-set touches workflows |
-| `vars.RELEASE_PR_TARGET_REPO` | where the draft PR is opened | falls back to this repository; cross-repo needs the token below |
-| `secrets.RELEASE_PR_TOKEN` | cross-repo PR creation | fine-grained PAT with `pull requests: write`; without it the run degrades to "branch pushed + compare link" |
+| `contents: write` | pushing the generated branch | agent workflow, runs in this repository |
+| `vars.RELEASE_GIT_NAME` / `RELEASE_GIT_EMAIL` | commit identity | must be the CLA-signed email, otherwise `ascend-cla/no` blocks the upstream PR |
+| `secrets.RELEASE_PUSH_TOKEN` | pushing the generated branch | **required**: fine-grained PAT scoped to this repository with **Contents: Read and write** and **Workflows: Read and write**. Every release change-set updates the four build/push workflow ymls (their `workflow_dispatch` version lists), and the built-in `GITHUB_TOKEN` can never create or update files under `.github/workflows/`, so a plain-token push is rejected by GitHub. `actions/checkout` uses this token; the workflow refuses to start without it |
+| `vars.RELEASE_UPSTREAM_REPO` / `RELEASE_UPSTREAM_REF` | optional overrides | default `Ascend/cann-container-image` and `main`; the base the release branch is generated on |
 | `vars.MAIL_NOTIFY_TO`, `secrets.MAIL_SERVER/PORT/USERNAME/PASSWORD` | crash email | if unset the step is skipped; `continue-on-error` keeps mail failures from masking the real one |
+
+No cross-repository token is required: the workflow never opens a PR. It prints
+a `compare` link and the owner opens the upstream PR by hand.
 
 Three things reviewers should weigh explicitly:
 
@@ -492,12 +516,12 @@ Three things reviewers should weigh explicitly:
 
 1. Merge into this repository (or a fork) — the comment trigger and cron only
    activate from the default branch.
-2. Set the variables/secrets above, `RELEASE_PUSH_TOKEN` included
-   (`RELEASE_PR_TARGET_REPO` can stay unset for a same-repo rehearsal).
+2. Set the variables/secrets above, `RELEASE_PUSH_TOKEN` included.
 3. Try it with `workflow_dispatch` on `release_cann_agent.yml`
    (`version` + optional `link_id`).
-4. Build/publish afterwards is the existing manual `workflow_dispatch`
-   batch flow, unchanged.
+4. On success, open the upstream PR from the compare link posted on the
+   issue; after it merges, run the existing manual `workflow_dispatch`
+   batch flow to build and publish - unchanged.
 
 ## Open questions for maintainers
 
@@ -505,5 +529,8 @@ Three things reviewers should weigh explicitly:
    behind an opt-in variable?
 2. Pin `dawidd6/action-send-mail` to a commit SHA, or replace the crash
    notification with another channel?
-3. For auto-generated release PRs: target this repository, or require
-   `RELEASE_PR_TARGET_REPO`/`RELEASE_PR_TOKEN` to point upstream?
+3. Should the automation eventually move into the upstream repository? There
+   the release PR would be same-repo (no branch/compare dance), the built-in
+   token could create it, and only the push token would still be required for
+   the workflow-file updates. This fork-based deployment deliberately avoids
+   asking upstream to host the automation first.

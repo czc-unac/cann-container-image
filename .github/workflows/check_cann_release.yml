@@ -25,15 +25,29 @@ jobs:
       MAIL_NOTIFY_FROM: ${{ vars.MAIL_NOTIFY_FROM }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the upstream alignment below fetches the release
+          # repository and the monitor runs against that state.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Prepare upstream state
+        env:
+          UPSTREAM_REPO: ${{ vars.RELEASE_UPSTREAM_REPO || 'Ascend/cann-container-image' }}
+          UPSTREAM_REF: ${{ vars.RELEASE_UPSTREAM_REF || 'main' }}
+        run: |
+          set -euo pipefail
+          bash tools/prepare_upstream_state.sh \
+            "https://github.com/$UPSTREAM_REPO.git" "$UPSTREAM_REF" upstream-base
       - name: Check for new CANN releases
         id: check
         run: |
-          python3 tools/check_cann_release.py --check > /tmp/report.json
+          set -euo pipefail
+          PYTHONPATH=/tmp/cann-tools python3 /tmp/cann-tools/check_cann_release.py \
+            --check > /tmp/report.json
           cat /tmp/report.json
       - name: Open one notification issue per version
         env:
