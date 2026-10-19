@@ -148,7 +148,20 @@ def known_tokens():
 
 
 def is_known(version, tokens):
-    return any(t == version or t.startswith(version + "-") for t in tokens)
+    """Whether any known token belongs to this exact version.
+
+    A token shaped like ``<version>-<chip>-...`` covers ``version``, but a
+    pre-release token must not: ``9.2.0-beta.1-310p-...`` starts with
+    ``9.2.0-`` yet says nothing about the stable ``9.2.0``.
+    """
+    for token in tokens:
+        if token == version:
+            return True
+        if token.startswith(version + "-"):
+            suffix = token[len(version) + 1:]
+            if not re.match(r"(?:beta|alpha|rc)\.", suffix):
+                return True
+    return False
 
 
 def publish_floor(bulletins, tokens):
