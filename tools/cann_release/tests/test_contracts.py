@@ -1,6 +1,8 @@
 import json
 import re
 
+import repo_files
+
 WORKFLOW_FILES = (
     ".github/workflows/build_and_push_cann.yml",
     ".github/workflows/build_and_push_manylinux.yml",
@@ -9,7 +11,7 @@ WORKFLOW_FILES = (
 )
 ARG_FILES = ("build_cann_arg.json", "build_manylinux_arg.json")
 PUBLISH_FILES = ("cann_publish_version.json", "manylinux_publish_version.json")
-DOC_PAIRS = ("cann_release_monitor",)
+DOC_PAIRS = ("cann_release_monitor", "release_generator")
 
 
 def read(repo_root, name):
@@ -68,6 +70,55 @@ def test_availability_policy_has_the_expected_shape(repo_root):
     templates = " ".join(availability["file_templates"])
     assert "{version}" in templates and "{arch}" in templates
     assert "{chip}" in templates, "no per-chip ops template configured"
+
+
+def test_workflow_option_anchors_are_exact(repo_root):
+    """The generator inserts options after this exact eight-space anchor."""
+    for name in WORKFLOW_FILES:
+        text = read(repo_root, name)
+        assert re.search(r"^        options:$", text, re.M), \
+            f"{name}: expected an eight-space 'options:' line"
+        assert re.search(r"^          - \S+$", text, re.M), \
+            f"{name}: expected ten-space '- <tag>' option lines"
+
+
+def test_overview_markers_are_present_exactly_once(repo_root):
+    for name in ("OVERVIEW.md", "OVERVIEW.zh.md"):
+        text = read(repo_root, name)
+        for marker in ("<!-- RELEASED:BEGIN -->", "<!-- RELEASED:END -->",
+                       "<!-- LATEST:BEGIN -->", "<!-- LATEST:END -->"):
+            assert text.count(marker) == 1, \
+                f"{name}: expected exactly one {marker}"
+
+
+def test_alpha_dict_block_is_parseable(repo_root):
+    text = read(repo_root, "tools/template.py")
+    assert repo_files.ALPHA_DICT_PATTERN.search(text), \
+        "tools/template.py: ALPHA_DICT block shape changed"
+
+
+def test_registration_json_round_trips_through_json_dump(repo_root):
+    # Only these four files are rewritten by the generator, so they must stay
+    # reproducible by json.dump; the config files are read-only.
+    for name in ARG_FILES + PUBLISH_FILES:
+        raw = read(repo_root, name)
+        data = json.loads(raw)
+        reproducible = any(
+            json.dumps(data, indent=indent, ensure_ascii=False) + tail == raw
+            for indent in (2, 4) for tail in ("\n", ""))
+        assert reproducible, \
+            f"{name}: formatting is not reproducible by json.dump"
+
+
+def test_release_matrix_is_declarative_and_structured(repo_root):
+    matrix = json.loads(read(repo_root, "tools/cann_release/release_matrix.json"))
+    for family in ("cann", "manylinux"):
+        section = matrix[family]
+        assert section["chips"], f"{family}.chips is empty"
+        assert section["py_versions"], f"{family}.py_versions is empty"
+        assert all(isinstance(entry, dict) and "name" in entry
+                   and "version" in entry for entry in section["os"]), \
+            f"{family}.os must use {{name, version}} objects"
 
 
 def heading_levels(path):
