@@ -8,7 +8,9 @@ CANN (Compute Architecture for Neural Networks) is a heterogeneous computing arc
 
 ## Image Download
 
+<!-- RELEASED:BEGIN -->
 CANN 9.2.0 has been released. Please visit the [Mirror Download](https://quay.io/repository/ascend/cann?tab=tags) page to obtain it.
+<!-- RELEASED:END -->
 
 ---
 
@@ -40,6 +42,7 @@ CANN Tags follow this pattern:
 
 
 
+<!-- LATEST:BEGIN -->
 ### LATEST CANN 9.2.0
 
 For tags associated with historical versions, please refer to [Supported Tags](https://github.com/Ascend/cann-container-image/tree/main/supported_tags.md).
@@ -68,6 +71,7 @@ For tags associated with historical versions, please refer to [Supported Tags](h
 | [`9.2.0-a3-openeuler24.03-py3.12-devel`](https://www.hiascend.com/developer/ascendhub/detail/17da20d1c2b6493cb38765adeba85884?version=9.2.0-a3-openeuler24.03-py3.12-devel) | [Dockerfile](https://github.com/Ascend/cann-container-image/blob/main/cann/9.2.0-a3-openeuler24.03-py3.12-devel/Dockerfile) | toolkit, ops, nnal, os-tool, Python-plugin, googletest |
 
 > Note: On aarch64, the `9.2.0-950-*` images additionally include URMA (Unified RoCE Message Access) for RoCE-based distributed communication; x86_64 images do not include it.
+<!-- LATEST:END -->
 
 ---
 

@@ -8,7 +8,9 @@ CANN（Compute Architecture for Neural Networks）是华为针对 AI 场景推�
 
 ## 镜像下载
 
+<!-- RELEASED:BEGIN -->
 CANN 最新版本 9.2.0 已经发布，请前往 [镜像下载](https://www.hiascend.com/developer/ascendhub/detail/17da20d1c2b6493cb38765adeba85884?version=9.2.0) 获取。
+<!-- RELEASED:END -->
 
 ---
 
@@ -38,6 +40,7 @@ CANN 镜像的所有 Tag 遵循以下格式：
 | `python版本` | `py3.10`、`py3.11`、`py3.12` | Python 版本 |
 | `-devel` | `-devel` | 开发态镜像所具有的特殊标记后缀 |
 
+<!-- LATEST:BEGIN -->
 ### 最新版本 CANN 9.2.0
 
 如下所示是CANN最新发布的 9.2.0 版本的所有镜像，历史版本所有的 Tag 请参考 [Supported Tags](https://github.com/Ascend/cann-container-image/tree/main/supported_tags.md)
@@ -66,6 +69,7 @@ CANN 镜像的所有 Tag 遵循以下格式：
 | [`9.2.0-a3-openeuler24.03-py3.12-devel`](https://www.hiascend.com/developer/ascendhub/detail/17da20d1c2b6493cb38765adeba85884?version=9.2.0-a3-openeuler24.03-py3.12-devel) | [Dockerfile](https://github.com/Ascend/cann-container-image/blob/main/cann/9.2.0-a3-openeuler24.03-py3.12-devel/Dockerfile) | toolkit、ops、nnal、os-tool、Python-plugin、googletest |
 
 > 注：在 aarch64 架构下，`9.2.0-950-*` 镜像额外包含 URMA（Unified RoCE Message Access，统一 RoCE 消息访问）用于 RoCE 分布式通信；x86_64 镜像不包含。
+<!-- LATEST:END -->
 
 ---
 

@@ -1,8 +1,21 @@
 {
   "comment": [
-    "Availability policy for tools/cann_release/monitor.py; see",
-    "docs/cann_release_monitor.md."
+    "Naming and probing policy for the CANN release automation.",
+    "The matrix itself is in release_matrix.json; see docs/release_generator.md."
   ],
+  "kinds": [
+    {"kind": "beta", "pattern": "^\\d+\\.\\d+\\.\\d+-beta\\.\\d+$"},
+    {"kind": "stable", "pattern": "^\\d+\\.\\d+\\.\\d+$"}
+  ],
+  "url_layout": {
+    "stable": "{base}/CANN/CANN%20{version}",
+    "beta": "{base}/CANN/CANN%20{link_id}"
+  },
+  "beta_requires_link_id": true,
+  "link_id_pattern": "^\\d+\\.\\d+\\.T\\d+$",
+  "docs": {
+    "mode": "block"
+  },
   "availability": {
     "arches": ["aarch64", "x86_64"],
     "file_templates": [
