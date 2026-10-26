@@ -1,0 +1,23 @@
+{
+  "comment": [
+    "Declarative release matrix: the generator builds the release from this",
+    "file. Add or drop a chip / OS / Python version here (one line) and",
+    "re-run; every generated tag is verified against OBS before any write.",
+    "os is structured as {name, version}; arches is not a matrix dimension."
+  ],
+  "cann": {
+    "chips": ["310p", "910", "910b", "A3", "950"],
+    "os": [
+      {"name": "ubuntu", "version": "22.04"},
+      {"name": "openeuler", "version": "24.03"}
+    ],
+    "py_versions": ["3.10", "3.11", "3.12"]
+  },
+  "manylinux": {
+    "chips": ["950", "910b", "310p", "A3"],
+    "os": [
+      {"name": "manylinux", "version": "2_34"}
+    ],
+    "py_versions": ["3.10", "3.11", "3.12"]
+  }
+}
