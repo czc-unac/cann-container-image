@@ -1,1 +1,2 @@
 jinja2
+requests  # tools/cann_release/monitor.py
