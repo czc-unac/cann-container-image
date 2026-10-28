@@ -66,15 +66,32 @@ def probe_settings(policy):
     return settings
 
 
+_PRE_RELEASE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
+
+
 def version_sort_key(version):
-    """Sort key so 9.1.0 < 9.1.0-beta.1 < 9.1.1 < 9.2.0-beta.1."""
-    parts = []
-    for token in re.split(r"[.\-]", version):
-        if token.isdigit():
-            parts.append((0, int(token), ""))
-        else:
-            parts.append((1, 0, token))
-    return parts
+    """Sort key following SemVer precedence.
+
+    9.1.0-alpha.1 < 9.1.0-beta.1 < 9.1.0-beta.2 < 9.1.0 < 9.1.1
+    < 9.2.0-beta.1 < 9.2.0
+
+    Pre-releases sort *before* the stable release they lead up to. Every
+    consumer (docs LATEST, matrix cloning, release listing) expects the
+    newest stable release to win over its own pre-releases. Anything that
+    does not look like a CANN version sorts after well-formed ones,
+    deterministically, so a typo can never masquerade as the newest release.
+    """
+    match = re.fullmatch(
+        r"(\d+(?:\.\d+)*)(?:-([A-Za-z]+)(?:\.(\d+))?)?", version)
+    if not match:
+        return (1, (), 0, 0, 0)
+    release = tuple(int(part) for part in match.group(1).split("."))
+    label = match.group(2)
+    if label is None:
+        return (0, release, 1, 0, 0)
+    rank = _PRE_RELEASE_RANK.get(label.lower(), len(_PRE_RELEASE_RANK))
+    return (0, release, 0, rank, int(match.group(3) or 0))
+
 
 
 def obs_base_url(template_path):
