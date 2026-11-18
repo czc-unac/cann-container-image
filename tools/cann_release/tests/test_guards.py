@@ -6,6 +6,7 @@ import sys
 import pytest
 
 import generator as gen
+import repo_files
 
 
 def policy():
@@ -68,3 +69,10 @@ def test_previous_release_prefers_the_stable_over_its_beta():
     previous, entries = gen.previous_release(arg)
     assert previous == "9.2.0"
     assert entries == [arg["cann"][0]]
+
+
+def test_arg_files_are_replaced_not_appended():
+    data = {"cann": [{"cann_version": "9.2.1"}]}
+    repo_files.replace_release_entries(
+        data, "cann", [{"cann_version": "9.3.0-beta.1"}])
+    assert data == {"cann": [{"cann_version": "9.3.0-beta.1"}]}
