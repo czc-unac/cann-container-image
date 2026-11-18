@@ -1,0 +1,36 @@
+name: test-tools
+
+# Unit and contract tests for the CANN automation tools. Fast, offline
+# (network calls are stubbed) and independent of the image build workflows.
+
+on:
+  pull_request:
+    paths:
+      - "tools/**"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - ".github/workflows/test_tools.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-tools-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tool tests
+        run: pytest -q tools/cann_release/tests
