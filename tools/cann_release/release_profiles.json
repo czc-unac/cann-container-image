@@ -1,0 +1,27 @@
+{
+  "comment": [
+    "Availability policy for tools/cann_release/monitor.py; see",
+    "docs/cann_release_monitor.md."
+  ],
+  "availability": {
+    "arches": ["aarch64", "x86_64"],
+    "file_templates": [
+      "Ascend-cann-toolkit_{version}_linux-{arch}.run",
+      "Ascend-cann-nnal_{version}_linux-{arch}.run",
+      "Ascend-cann-{chip}-ops_{version}_linux-{arch}.run"
+    ],
+    "beta_scan_max": 600,
+    "missing_statuses": [403, 404],
+    "probe": {
+      "comment": [
+        "Unknown answers are retried with backoff; only a value that stays",
+        "unknown is an error. See docs/cann_release_monitor.md."
+      ],
+      "timeout_seconds": 30,
+      "workers": 4,
+      "retries": 4,
+      "backoff_seconds": 0.5,
+      "unknown_budget": 8
+    }
+  }
+}
