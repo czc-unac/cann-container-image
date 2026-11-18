@@ -95,6 +95,12 @@ def previous_release(arg_cann):
                       if e["cann_version"] == previous]
 
 
+def replace_release_entries(data, key, entries):
+    """The arg files describe one release; history lives in the publish JSONs."""
+    data[key] = entries
+    return data
+
+
 def patch_alpha_dict(version, link_id):
     """Insert a quoted entry before the closing brace of ALPHA_DICT."""
     text = read_text(TEMPLATE_PY)

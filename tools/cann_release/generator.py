@@ -32,7 +32,8 @@ from repo_files import (BATCH_CANN_YML, BATCH_MANYLINUX_YML, EXIT_COVERED,
                         abort, dockerfile_paths, dump_json_lossless,
                         insert_into_choice_list, load_json_lossless,
                         patch_alpha_dict, prepend_publish, previous_release,
-                        read_text, render_dockerfiles)
+                        read_text, replace_release_entries,
+                        render_dockerfiles)
 
 PROFILES_JSON = "tools/cann_release/release_profiles.json"
 OVERVIEW_FILES = ("OVERVIEW.md", "OVERVIEW.zh.md")
@@ -100,6 +101,13 @@ def self_check(version, cann_entries, manylinux_entries):
     if not is_known(version, known_tokens()):
         abort(EXIT_DRIFT, "post-generation self-check: the registration files "
                           "still do not cover " + version)
+    for path, key in ((ARG_CANN_JSON, "cann"),
+                      (ARG_MANYLINUX_JSON, "manylinux")):
+        data, _, _ = load_json_lossless(path)
+        versions = {e["cann_version"] for e in data[key]}
+        if versions != {version}:
+            abort(EXIT_DRIFT, f"{path} must describe only {version} after "
+                              f"generation, got {sorted(versions)}")
     missing = [p for p in dockerfile_paths(cann_entries, manylinux_entries)
                if not os.path.exists(p)]
     if missing:
@@ -164,9 +172,9 @@ def main():
     if kind == "beta":
         patch_alpha_dict(args.version, link_id)
 
-    arg_cann["cann"] = new_cann + arg_cann["cann"]
+    replace_release_entries(arg_cann, "cann", new_cann)
     dump_json_lossless(ARG_CANN_JSON, arg_cann, cann_indent, cann_tail)
-    arg_mlnx["manylinux"] = new_manylinux + arg_mlnx["manylinux"]
+    replace_release_entries(arg_mlnx, "manylinux", new_manylinux)
     dump_json_lossless(ARG_MANYLINUX_JSON, arg_mlnx, mlnx_indent, mlnx_tail)
 
     render_dockerfiles(new_cann, new_manylinux)
