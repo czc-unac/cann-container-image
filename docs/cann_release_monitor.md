@@ -30,6 +30,22 @@ A version is reported only when all three checks pass.
    (for example `9.1.0-beta.2`, whose ops archives for 910b/310p/A3/910 were
    never uploaded) are listed in the run summary and open no issue.
 
+## Sources
+
+Two sources are merged on every run:
+
+* the **bulletin list** is the complete history and the authority for
+  `publishTime`, which drives the freshness floor;
+* the **download page** (`cann/info/zh/0`) is usually refreshed earlier and
+  also reports the official OBS directory of preview builds (`CANN 9.3.T2`).
+  Its latest release is added to the bulletin map, and that directory is
+  probed directly instead of scanning OBS; the scan remains the fallback
+  when no directory is reported.
+
+The download page is best-effort: if it is unavailable the run logs a warning
+and continues on the bulletin alone. A bulletin failure is still fatal,
+because the complete history and the freshness floor depend on it.
+
 ## Report and issue lifecycle
 
 `--check` prints JSON to stdout:
@@ -77,7 +93,8 @@ Beta versions have no derivable OBS directory (`CANN x.y.Tn`), so the scan
 walks candidate directories in batches of `workers`, stops at the first
 complete one, and aborts once `unknown_budget` candidates answer unclearly -
 an unreachable gateway fails in minutes instead of retrying through 600
-candidates.
+candidates. When the download page already reports the directory, the scan is
+skipped.
 
 ## Workflow
 
