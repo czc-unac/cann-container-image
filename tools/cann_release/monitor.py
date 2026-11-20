@@ -32,9 +32,15 @@ from registry import (ARG_CANN_JSON, ARG_MANYLINUX_JSON, is_known,
 BULLETIN_LIST_URL = ("https://www.hiascend.com/ascendgateway/ascendservice/"
                      "bulletins/front/list")
 BULLETIN_REFERER = "https://www.hiascend.com/productbulletins?tab=CANN"
+DOWNLOAD_INFO_URL = ("https://www.hiascend.com/ascendgateway/ascendservice/"
+                     "cann/info/zh/0")
+DOWNLOAD_REFERER = ("https://www.hiascend.com/developer/download/community/"
+                    "result?module=cann")
 PROFILES_JSON = "tools/cann_release/release_profiles.json"
 
 _VERSION_PREFIX_RE = re.compile(r"^\s*CANN\s*", re.I)
+_OBS_DIR_RE = re.compile(r"/CANN(?:%20| )([^/]+)/")
+_OBS_T_DIR_RE = re.compile(r"^\d+\.\d+\.T\d+$")
 
 
 def normalize_version_name(name):
@@ -91,6 +97,59 @@ def fetch_bulletin_versions(session):
         page += 1
 
 
+def extract_obs_dir(package_list):
+    """Official OBS directory (CANN x.y.Tn) from the page's download URLs."""
+    dirs = set()
+    for package in package_list or []:
+        match = _OBS_DIR_RE.search(package.get("downloadUrl") or "")
+        if match:
+            dirs.add(match.group(1))
+    t_dirs = sorted(d for d in dirs if _OBS_T_DIR_RE.match(d))
+    if len(t_dirs) == 1:
+        return t_dirs[0]
+    if len(t_dirs) > 1:
+        print(f"[cann-release] WARN: multiple OBS directories on the download "
+              f"page: {t_dirs}", file=sys.stderr)
+    return ""
+
+
+def fetch_download_page_latest(session):
+    """Latest release from the download page, or None when it is unavailable.
+
+    The page reports the official OBS directory for preview builds, which the
+    bulletin does not. It is best-effort: a failure must never block the run.
+    """
+    try:
+        resp = session.get(DOWNLOAD_INFO_URL,
+                           headers={"Referer": DOWNLOAD_REFERER}, timeout=30)
+        if resp.status_code != 200:
+            raise ValueError(f"HTTP {resp.status_code}")
+        data = resp.json()["data"]
+        version = normalize_version_name(data["versionName"])
+        if not version:
+            raise ValueError("empty version name")
+        return {
+            "version": version,
+            "publishTime": data.get("publishTime") or "",
+            "oss_dir": extract_obs_dir(data.get("packageList")),
+        }
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        print(f"[cann-release] WARN: download page source unavailable: {exc}",
+              file=sys.stderr)
+        return None
+
+
+def merge_download_page(bulletins, page):
+    """Add the page's latest release to the bulletin map; return OBS hints."""
+    if not page:
+        return {}
+    version = page["version"]
+    if version not in bulletins:
+        bulletins[version] = {"id": None,
+                              "publishTime": page["publishTime"]}
+    return {version: page["oss_dir"]} if page["oss_dir"] else {}
+
+
 def publish_floor(bulletins, tokens):
     """Newest publishTime among bulletin versions the repository covers."""
     times = [bulletins[v].get("publishTime") or "" for v in bulletins
@@ -135,15 +194,30 @@ def candidate_versions(bulletins, tokens):
     return sorted(candidates, key=version_sort_key)
 
 
-def buildability(version, kind, policy, base_url, chips):
+def buildability(version, kind, policy, base_url, chips, oss_dir_hint=""):
     """Decide whether this version's full package set exists on OBS.
 
-    Returns (buildable, oss_dir, reason, missing_sample). Raises
-    AvailabilityUnknown when a probe could not be decided.
+    Returns (buildable, oss_dir, reason, missing_sample). A beta with a
+    directory hint from the download page is probed directly; otherwise the
+    OBS directory is discovered by scanning. Raises AvailabilityUnknown when
+    a probe could not be decided.
     """
     files = required_files(policy, version, chips)
     missing_statuses = policy["missing_statuses"]
     if kind == "beta":
+        if oss_dir_hint:
+            prefix = cann_url_prefix(base_url, version, kind, oss_dir_hint)
+            missing, unknown = check_files(prefix, files, missing_statuses,
+                                           probe_settings(policy))
+            if unknown:
+                raise AvailabilityUnknown(
+                    f"probing {prefix} answered unclearly: {unknown[:3]}")
+            if missing:
+                return (False, "",
+                        f"package set incomplete under {oss_dir_hint} "
+                        f"({len(missing)}/{len(files)} files missing)",
+                        missing[:4])
+            return True, oss_dir_hint, "", []
         buildable_dir, found, incomplete = scan_beta(
             base_url, version, files, policy, missing_statuses)
         if buildable_dir:
@@ -176,6 +250,7 @@ def cmd_check(session):
         # new" on it would wrongly close open notifications.
         raise BulletinAPIError("bulletin list came back empty")
     tokens = known_tokens()
+    oss_hints = merge_download_page(bulletins, fetch_download_page_latest(session))
     candidates = candidate_versions(bulletins, tokens)
     policy = load_availability_policy(PROFILES_JSON)
     base_url = obs_base_url(TEMPLATE_PY)
@@ -188,7 +263,8 @@ def cmd_check(session):
         kind = classify_version(version)
         publish_time = bulletins[version].get("publishTime") or ""
         buildable, oss_dir, reason, missing = buildability(
-            version, kind, policy, base_url, chips)
+            version, kind, policy, base_url, chips,
+            oss_hints.get(version, ""))
         if buildable:
             new_versions.append({"version": version,
                                  "publishTime": publish_time,
