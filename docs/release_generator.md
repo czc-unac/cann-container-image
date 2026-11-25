@@ -29,10 +29,10 @@ with the monitor. `docs/cann_release_monitor.md` covers the monitor itself.
 ```
 
 Accepted only when all of the following hold: the comment is on an issue whose
-title is `New CANN release detected: <version>`, the commenter is the
-repository owner, the version equals the issue title's version, and both tokens
-pass their regexes. `workflow_dispatch` (with `version` / `link_id` inputs)
-bypasses the guard for rehearsals.
+title is `New CANN release detected: <version>`, the commenter has write access
+to the repository (OWNER, MEMBER or COLLABORATOR), the version equals the issue
+title's version, and both tokens pass their regexes. `workflow_dispatch` (with
+`version` / `link_id` inputs) bypasses the guard for rehearsals.
 
 `tools/cann_release/prepare_upstream_state.sh <upstream-url> <ref> <branch>`:
 

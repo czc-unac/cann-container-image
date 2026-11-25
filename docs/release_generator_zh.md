@@ -17,7 +17,7 @@
 /release-cann <version> <x.y.Tn>     (beta)
 ```
 
-同时满足以下条件才会接受：评论位于标题为 `New CANN release detected: <version>` 的 issue 下、评论者是仓库 owner、评论中的版本与 issue 标题一致、两个 token 都通过正则校验。`workflow_dispatch`（带 `version` / `link_id` 输入）可绕过守卫用于演练。
+同时满足以下条件才会接受：评论位于标题为 `New CANN release detected: <version>` 的 issue 下、评论者具有仓库写权限（OWNER / MEMBER / COLLABORATOR）、评论中的版本与 issue 标题一致、两个 token 都通过正则校验。`workflow_dispatch`（带 `version` / `link_id` 输入）可绕过守卫用于演练。
 
 `tools/cann_release/prepare_upstream_state.sh <upstream-url> <ref> <branch>`：
 
