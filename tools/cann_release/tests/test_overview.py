@@ -88,3 +88,62 @@ def test_skip_mode_leaves_the_file_untouched(tmp_path, monkeypatch):
     before = path.read_text(encoding="utf-8")
     docs.update_overview("OVERVIEW.md", "9.3.0", entries(), "skip")
     assert path.read_text(encoding="utf-8") == before
+
+
+def sample_doc(row_label, markers):
+    released_begin, released_end, latest_begin, latest_end = markers
+    return (
+        f"| `{row_label}` | `9.2.1`,`9.2.0`, `9.1.1`, etc. | version |\n"
+        "#   A3:   9.2.1-a3-ubuntu22.04-py3.12\n"
+        "#   310P: 9.2.1-310p-ubuntu22.04-py3.12\n"
+        "export CANN_TAG=9.2.1-a3-ubuntu22.04-py3.12\n"
+        "export CANN_TAG=9.2.1-310p-openeuler24.03-py3.12\n"
+        f"{released_begin}\nold\n{released_end}\n"
+        f"{latest_begin}\nold\n{latest_end}\n"
+    )
+
+
+def write_app_id(tmp_path):
+    (tmp_path / "supported_tags.md").write_text(
+        f"| [`x`](https://www.hiascend.com/developer/ascendhub/detail/"
+        f"{APP_ID}?version=x) | x | x |\n", encoding="utf-8")
+
+
+def test_refreshes_tag_examples_outside_the_markers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_app_id(tmp_path)
+    doc = sample_doc("cann-version", (
+        "<!-- RELEASED:BEGIN -->", "<!-- RELEASED:END -->",
+        "<!-- LATEST:BEGIN -->", "<!-- LATEST:END -->"))
+    path = tmp_path / "OVERVIEW.md"
+    path.write_text(doc, encoding="utf-8", newline="")
+
+    docs.update_overview("OVERVIEW.md", "9.2.2", entries(), "block")
+    text = path.read_text(encoding="utf-8")
+    assert "| `cann-version` | `9.2.2`, `9.2.1`,`9.2.0`" in text
+    assert "#   A3:   9.2.2-a3-ubuntu22.04-py3.12" in text
+    assert "#   310P: 9.2.2-310p-ubuntu22.04-py3.12" in text
+    assert "export CANN_TAG=9.2.2-a3-ubuntu22.04-py3.12" in text
+    assert "export CANN_TAG=9.2.2-310p-openeuler24.03-py3.12" in text
+
+    docs.update_overview("OVERVIEW.md", "9.2.2", entries(), "block")
+    again = path.read_text(encoding="utf-8")
+    row = next(line for line in again.splitlines()
+               if line.startswith("| `cann-version` |"))
+    assert row.count("`9.2.2`") == 1
+
+
+def test_refreshes_chinese_tag_examples(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_app_id(tmp_path)
+    doc = sample_doc("cann版本", (
+        "<!-- RELEASED:BEGIN -->", "<!-- RELEASED:END -->",
+        "<!-- LATEST:BEGIN -->", "<!-- LATEST:END -->"))
+    path = tmp_path / "OVERVIEW.zh.md"
+    path.write_text(doc, encoding="utf-8", newline="")
+
+    docs.update_overview("OVERVIEW.zh.md", "9.2.2", entries(), "block")
+    text = path.read_text(encoding="utf-8")
+    assert "| `cann版本` | `9.2.2`, `9.2.1`" in text
+    assert "export CANN_TAG=9.2.2-a3-ubuntu22.04-py3.12" in text
+    assert "export CANN_TAG=9.2.2-310p-openeuler24.03-py3.12" in text

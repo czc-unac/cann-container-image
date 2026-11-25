@@ -105,7 +105,7 @@ Modify `OVERVIEW.md`.
 
 Modify `OVERVIEW.zh.md`.
 
-Change Required: the generator owns only the blocks fenced by `<!-- RELEASED:BEGIN/END -->` and `<!-- LATEST:BEGIN/END -->` - the released sentence and the LATEST heading/table/note. Keep those markers in place when editing manually and change only what is inside them. The tag-naming example row and the quick-start `CANN_TAG=` samples live outside the markers: they are documentation samples (still valid tags) and are left to humans.
+Change Required: the generator owns only the blocks fenced by `<!-- RELEASED:BEGIN/END -->` and `<!-- LATEST:BEGIN/END -->` - the released sentence and the LATEST heading/table/note. Keep those markers in place when editing manually and change only what is inside them. The generator also refreshes the tag-naming example row and every version reference in the quick-start chip comments and `CANN_TAG=` samples.
 
 ### Step 8:  Update supported_tags
 Action: update `supported_tags.md`

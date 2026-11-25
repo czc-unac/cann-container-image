@@ -91,6 +91,15 @@ def test_overview_markers_are_present_exactly_once(repo_root):
                 f"{name}: expected exactly one {marker}"
 
 
+def test_overview_carries_the_tag_examples(repo_root):
+    for name in ("OVERVIEW.md", "OVERVIEW.zh.md"):
+        text = read(repo_root, name)
+        assert re.search(r"^\| `cann(?:-version|版本)` \|", text, re.M), \
+            f"{name}: tag-naming example row not found"
+        assert re.search(r"^export CANN_TAG=\S+$", text, re.M), \
+            f"{name}: no quick-start CANN_TAG sample"
+
+
 def test_alpha_dict_block_is_parseable(repo_root):
     text = read(repo_root, "tools/template.py")
     assert repo_files.ALPHA_DICT_PATTERN.search(text), \

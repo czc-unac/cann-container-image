@@ -107,10 +107,10 @@ the generator owns:
 Everything outside the markers can be rewritten freely. Inside, the generator
 writes the released sentence, the LATEST heading/intro/table/note, in the
 document's own wording and separators (`toolkit, ops, nnal` vs
-`toolkit、ops、nnal`). The tag-naming example row and the quick-start
-`CANN_TAG=` samples are deliberately **not** automated: they are documentation
-samples (still valid tags), so they never block a release and can be edited by
-hand.
+`toolkit、ops、nnal`). The generator also refreshes the tag-naming example row
+(the new version is prepended) and every version reference in the quick-start
+chip comments and `CANN_TAG=` samples, so the prose cannot lag behind the
+LATEST block.
 
 `tools/cann_release/release_profiles.json` exposes `docs.mode`:
 

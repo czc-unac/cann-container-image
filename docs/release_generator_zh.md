@@ -75,7 +75,7 @@
 <!-- LATEST:BEGIN -->  ... <!-- LATEST:END -->
 ```
 
-标记之外可以随意重写。标记之内由生成器写入发布语句、LATEST 标题/简介/表格/注释，并使用各语言自己的措辞与分隔符（`toolkit, ops, nnal` 与 `toolkit、ops、nnal`）。tag 命名示例行和 quick-start 中的 `CANN_TAG=` 示例刻意**不**自动化：它们只是文档示例（仍是有效的 tag），因此不会阻塞发版，可以手工修改。
+标记之外可以随意重写。标记之内由生成器写入发布语句、LATEST 标题/简介/表格/注释，并使用各语言自己的措辞与分隔符（`toolkit, ops, nnal` 与 `toolkit、ops、nnal`）。生成器还会同步 tag 命名示例行（把新版本插到最前）以及 quick-start 中芯片注释和 `CANN_TAG=` 的所有版本引用，避免正文落后于 LATEST 块。
 
 `tools/cann_release/release_profiles.json` 提供 `docs.mode`：
 

@@ -7,6 +7,7 @@ outside them. Wording, table layout and separators are per language.
 supported_tags.md gets a new section prepended before the newest version.
 """
 import re
+import sys
 
 from registry import SUPPORTED_TAGS_MD
 from repo_files import (abort, EXIT_DRIFT, edit_text_lines, read_text,
@@ -130,6 +131,48 @@ def latest_py_version(entries):
                key=lambda py: tuple(int(part) for part in py.split(".")))
 
 
+def refresh_tag_examples(text, path, version, entries):
+    """Keep the prose tag examples in sync with the release being generated.
+
+    The LATEST block is marker-owned, but OVERVIEW also teaches the tag
+    format: the example row and the quick-start chip comments / CANN_TAG
+    lines. Those are not fenced, so they are refreshed here - the example
+    row gains the new version, and tags in comments/exports get the new
+    version segment. A missing example row is only a warning.
+    """
+    chips = sorted({entry["cann_chip"].lower() for entry in entries},
+                   key=len, reverse=True)
+    chip_re = "|".join(re.escape(chip) for chip in chips)
+    tag_re = re.compile(
+        rf"(\d[\w.\-]*?)-(?P<chip>{chip_re})-"
+        r"(?P<rest>[A-Za-z0-9_.]+-py\d+\.\d+(?:-devel)?)")
+
+    def refresh_line(line):
+        stripped = line.lstrip()
+        if not (stripped.startswith("#") or
+                stripped.startswith("export CANN_TAG=")):
+            return line
+        return tag_re.sub(
+            lambda match: f"{version}-{match.group('chip')}-{match.group('rest')}",
+            line)
+
+    text = "\n".join(refresh_line(line) for line in text.split("\n"))
+
+    row_re = re.compile(r"^(\| `(?:cann-version|cann版本)` \| )([^|]+)(\|.*)$", re.M)
+
+    def refresh_row(match):
+        cell = match.group(2)
+        if f"`{version}`" in cell:
+            return match.group(0)
+        return f"{match.group(1)}`{version}`, {cell.lstrip()}{match.group(3)}"
+
+    text, count = row_re.subn(refresh_row, text)
+    if count == 0:
+        print(f"[cann-release] WARN: {path}: tag-naming example row not found",
+              file=sys.stderr)
+    return text
+
+
 def update_overview(path, version, cann_entries, docs_mode):
     if docs_mode == "skip":
         print(f"[cann-release] {path}: skipped (docs.mode=skip)")
@@ -137,6 +180,7 @@ def update_overview(path, version, cann_entries, docs_mode):
     raw = read_text_raw(path)
     had_trailing_newline = raw.endswith("\n")
     text = raw.replace("\r\n", "\n")
+    text = refresh_tag_examples(text, path, version, cann_entries)
     config = OVERVIEW_TEXT[path]
     app_id = tags_app_id()
     newest_py = latest_py_version(cann_entries)
