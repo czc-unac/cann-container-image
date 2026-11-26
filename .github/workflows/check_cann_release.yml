@@ -1,0 +1,124 @@
+name: check-cann-release
+
+on:
+  schedule:
+    - cron: '23 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cann-release-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Check for new CANN releases
+        id: check
+        run: |
+          set -euo pipefail
+          python3 tools/cann_release/monitor.py --check > /tmp/report.json
+          cat /tmp/report.json
+      - name: Open one notification issue per version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          jq -r '.new_versions[] | [.version, (.publishTime // "unknown"), (.oss_dir // "")] | @tsv' /tmp/report.json |
+          while IFS=$'\t' read -r version publish oss_dir; do
+            # Version names come from an external bulletin API; never let a
+            # surprising token into an issue title or search string.
+            if ! [[ "$version" =~ ^[0-9][0-9A-Za-z.-]*$ ]]; then
+              echo "skipping implausible version name: $version"
+              continue
+            fi
+            title="New CANN release detected: $version"
+            {
+              echo "## CANN \`$version\` is announced but not covered"
+              echo
+              echo "- Announced: $publish"
+              echo "- Source: [CANN bulletins page](https://www.hiascend.com/productbulletins?tab=CANN)"
+              echo
+              echo "To generate a draft release PR, comment on this issue:"
+              echo
+              if [[ "$version" == *-beta.* ]]; then
+                if [ -n "$oss_dir" ]; then
+                  echo "- \`/release-cann $version $oss_dir\` (OBS directory"
+                  echo "  detected automatically; \`<link-id>\` is the"
+                  echo "  \`CANN x.y.Tn\` directory from the bulletin download links)"
+                else
+                  echo "- \`/release-cann $version <link-id>\` - \`<link-id>\` is the"
+                  echo "  \`CANN x.y.Tn\` OBS directory from the bulletin download links,"
+                  echo "  e.g. \`9.2.T3\`"
+                fi
+              else
+                echo "- \`/release-cann $version\`"
+              fi
+              echo
+              echo "Detected by run $RUN_URL."
+            } > /tmp/issue.md
+            # in:title phrase search is token-prefix based, so also require
+            # an exact title match before treating an issue as "already open".
+            # gh's --jq only takes an expression (no jq CLI flags such as
+            # --arg), so the matching runs through the runner's real jq.
+            number=$(gh issue list --state open --search "\"$title\" in:title" \
+                       --json number,title |
+                     jq -r --arg t "$title" \
+                       '[.[] | select(.title == $t) | .number][0] // empty')
+            if [ -n "$number" ]; then
+              # The body is static per version (version, publish time, usage
+              # hint, OBS directory all exist at creation); re-editing it on
+              # every run would only churn the run URL, so leave it alone.
+              echo "issue #$number already tracks $version; leaving it untouched"
+            else
+              gh issue create --title "$title" --body-file /tmp/issue.md
+            fi
+          done
+      - name: Close notifications whose versions are covered
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          jq -r '.new_versions[].version' /tmp/report.json > /tmp/still-uncovered.txt
+          gh issue list --state open \
+            --search '"New CANN release detected" in:title' \
+            --json number,title |
+          jq -r '.[] | [.number, .title] | @tsv' |
+          while IFS=$'\t' read -r number title; do
+            version="${title#New CANN release detected: }"
+            if ! grep -Fxq "$version" /tmp/still-uncovered.txt; then
+              gh issue close "$number" --comment \
+                "CANN \`$version\` is now covered by the repository."
+            fi
+          done
+      - name: Report announced-but-incomplete versions
+        run: |
+          set -euo pipefail
+          count=$(jq '.announced_not_buildable | length' /tmp/report.json)
+          echo "announced-not-buildable versions: $count"
+          if [ "$count" -eq 0 ]; then
+            exit 0
+          fi
+          {
+            echo "### Announced but not buildable ($count)"
+            echo
+            echo "No issues are opened for these: the packages CANN uploaded"
+            echo "do not cover this repository's platform matrix."
+            echo
+            jq -r '.announced_not_buildable[]
+                   | "- `\(.version)` - \(.reason)"
+                     + (if (.missing | length) > 0
+                        then "; missing e.g. " + (.missing | join(", "))
+                        else "" end)' /tmp/report.json
+          } >> "$GITHUB_STEP_SUMMARY"

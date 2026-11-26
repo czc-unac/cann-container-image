@@ -1,0 +1,40 @@
+{
+  "comment": [
+    "Naming and probing policy for the CANN release automation.",
+    "The matrix itself is in release_matrix.json; see docs/release_generator.md."
+  ],
+  "kinds": [
+    {"kind": "beta", "pattern": "^\\d+\\.\\d+\\.\\d+-beta\\.\\d+$"},
+    {"kind": "stable", "pattern": "^\\d+\\.\\d+\\.\\d+$"}
+  ],
+  "url_layout": {
+    "stable": "{base}/CANN/CANN%20{version}",
+    "beta": "{base}/CANN/CANN%20{link_id}"
+  },
+  "beta_requires_link_id": true,
+  "link_id_pattern": "^\\d+\\.\\d+\\.T\\d+$",
+  "docs": {
+    "mode": "block"
+  },
+  "availability": {
+    "arches": ["aarch64", "x86_64"],
+    "file_templates": [
+      "Ascend-cann-toolkit_{version}_linux-{arch}.run",
+      "Ascend-cann-nnal_{version}_linux-{arch}.run",
+      "Ascend-cann-{chip}-ops_{version}_linux-{arch}.run"
+    ],
+    "beta_scan_max": 600,
+    "missing_statuses": [403, 404],
+    "probe": {
+      "comment": [
+        "Unknown answers are retried with backoff; only a value that stays",
+        "unknown is an error. See docs/cann_release_monitor.md."
+      ],
+      "timeout_seconds": 30,
+      "workers": 4,
+      "retries": 4,
+      "backoff_seconds": 0.5,
+      "unknown_budget": 8
+    }
+  }
+}
